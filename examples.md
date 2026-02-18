@@ -9,9 +9,9 @@ End-to-end examples for connecting to existing kdb+ processes and working with t
 Every example assumes a kdb+ process is already running with tables deployed by someone else. You need the host, port, and (usually) credentials.
 
 ```python
-from qorm import Engine, Session, avg_, sum_, min_, max_, count_, first_, last_
+from qorm import Engine, Session, AsyncSession, avg_, sum_, min_, max_, count_, first_, last_
 from qorm import aj, lj, ij, wj
-from qorm import EngineRegistry, EngineGroup, QFunction, q_api
+from qorm import EngineRegistry, EngineGroup, QFunction, q_api, Subscriber
 ```
 
 ---
@@ -570,4 +570,272 @@ with equities.session("rdb") as s:
     # --- Call a deployed function ---
     vwap_data = s.call("calcVWAP", "AAPL")
     print("AAPL VWAP:", vwap_data)
+```
+
+---
+
+## 23. TLS/SSL connections
+
+```python
+from qorm import Engine, Session
+
+# Enable TLS with system CA verification
+engine = Engine(host="kdb-prod", port=5000, tls=True)
+
+# From a DSN string with the kdb+tls:// scheme
+engine = Engine.from_dsn("kdb+tls://svc_user:secret@kdb-prod:5000")
+
+# Disable certificate verification (self-signed certs, dev environments)
+engine = Engine(host="kdb-dev", port=5000, tls=True, tls_verify=False)
+
+# Custom SSL context (client certificates, custom CA bundle)
+import ssl
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.load_cert_chain("client.crt", "client.key")
+ctx.load_verify_locations("ca-bundle.crt")
+
+engine = Engine(host="kdb-prod", port=5000, tls=True, tls_context=ctx)
+
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+    result = s.exec(Trade.select().limit(10))
+```
+
+---
+
+## 24. Keyed table reflection
+
+```python
+with Session(engine) as s:
+    # Reflect a keyed table — automatically detects key columns
+    DailyPrice = s.reflect("daily_price")
+
+    # Check if it's a keyed model
+    from qorm import KeyedModel
+    print(issubclass(DailyPrice, KeyedModel))  # True
+
+    # Inspect keys vs value columns
+    print(DailyPrice.key_columns())    # ['sym', 'date']
+    print(DailyPrice.value_columns())  # ['close', 'volume']
+
+    # Query it like any other model
+    result = s.exec(
+        DailyPrice.select(
+            DailyPrice.sym,
+            avg_close=avg_(DailyPrice.close),
+        ).by(DailyPrice.sym)
+    )
+    for row in result:
+        print(f"{row.sym}: avg close = {row.avg_close:.2f}")
+```
+
+---
+
+## 25. Connection health checks
+
+```python
+from qorm import Engine, SyncConnection
+
+engine = Engine(host="kdb-prod", port=5010)
+
+# Manual health check on a connection
+conn = engine.connect()
+conn.open()
+
+if conn.ping():
+    print("Connection is alive")
+    result = conn.query("select from trade where i<5")
+else:
+    print("Connection is stale, reconnecting...")
+    conn.close()
+    conn = engine.connect()
+    conn.open()
+
+conn.close()
+```
+
+---
+
+## 26. Pool with health checks
+
+```python
+from qorm import SyncPool, AsyncPool
+
+# Pools automatically check connection health on acquire (default)
+with SyncPool(engine, min_size=2, max_size=10, check_on_acquire=True) as pool:
+    # Dead connections are replaced transparently
+    conn = pool.acquire()
+    print(f"Pool size: {pool.size}")
+    try:
+        result = conn.query("select from trade where i<10")
+    finally:
+        pool.release(conn)
+
+# Disable health checks for performance-critical paths
+with SyncPool(engine, min_size=5, max_size=20, check_on_acquire=False) as pool:
+    conn = pool.acquire()
+    # ...
+    pool.release(conn)
+```
+
+---
+
+## 27. Pool from registry
+
+```python
+equities = EngineRegistry.from_config({
+    "rdb": {"host": "eq-rdb", "port": 5010},
+    "hdb": {"host": "eq-hdb", "port": 5012},
+})
+
+# Create a connection pool directly from the registry
+with equities.pool("rdb", min_size=2, max_size=10) as pool:
+    conn = pool.acquire()
+    try:
+        result = conn.query("select from trade where i<100")
+    finally:
+        pool.release(conn)
+
+# Async pool from registry
+# async with equities.async_pool("rdb", min_size=2, max_size=10) as pool:
+#     conn = await pool.acquire()
+#     ...
+```
+
+---
+
+## 28. Debug / Explain mode
+
+```python
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+
+    # Inspect the generated q before executing
+    query = (
+        Trade.select(Trade.sym, avg_price=avg_(Trade.price))
+             .where(Trade.price > 100)
+             .by(Trade.sym)
+    )
+    print(query.explain())
+    # -- SelectQuery on `trade
+    # ?[trade;enlist ((price>100));(enlist `sym)!enlist `sym;`avg_price`sym!(`avg;`price)]
+
+    # Works on all query types
+    print(Trade.update().set(price=100.0).where(Trade.sym == "AAPL").explain())
+    print(Trade.delete().where(Trade.sym == "OLD").explain())
+
+    # Joins too
+    Quote = s.reflect("quote")
+    print(aj([Trade.sym, Trade.time], Trade, Quote).explain())
+```
+
+---
+
+## 29. Logging
+
+```python
+import logging
+
+# Enable debug logging to see all qorm activity
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s"
+)
+
+# Or selectively enable subsystems
+logging.getLogger("qorm").setLevel(logging.DEBUG)           # session ops + timing
+logging.getLogger("qorm.connection").setLevel(logging.DEBUG) # connect/disconnect
+logging.getLogger("qorm.pool").setLevel(logging.DEBUG)       # pool acquire/release
+logging.getLogger("qorm.subscription").setLevel(logging.DEBUG)  # pub-sub events
+
+engine = Engine(host="kdb-prod", port=5010)
+
+with Session(engine) as s:
+    # Each operation logs the query text and execution time
+    result = s.raw("select from trade where i<5")
+    # DEBUG qorm: raw: select from trade where i<5
+    # DEBUG qorm: raw completed in 1.234ms
+
+    Trade = s.reflect("trade")
+    result = s.exec(Trade.select().limit(10))
+    # DEBUG qorm: exec: ?[trade;();0b;()]
+    # DEBUG qorm: exec completed in 0.892ms
+
+    result = s.call("getStatus")
+    # DEBUG qorm: call: getStatus()
+    # DEBUG qorm: call completed in 0.456ms
+```
+
+---
+
+## 30. Subscription / Pub-sub (real-time data)
+
+```python
+import asyncio
+from qorm import Engine, Subscriber
+
+engine = Engine(host="tickerplant", port=5010)
+
+# Define a callback — called for each incoming update
+async def on_trade(table_name, data):
+    print(f"[{table_name}] received {len(data)} rows")
+    # data is the raw kdb+ table data (dict of columns)
+
+async def main():
+    # Using context manager
+    async with Subscriber(engine, callback=on_trade) as sub:
+        # Subscribe to specific symbols
+        await sub.subscribe("trade", ["AAPL", "MSFT", "GOOG"])
+
+        # Subscribe to all quotes
+        await sub.subscribe("quote")
+
+        # Listen for updates (blocks until sub.stop() is called)
+        await sub.listen()
+
+asyncio.run(main())
+```
+
+Stopping a subscriber from another coroutine:
+
+```python
+async def main():
+    sub = Subscriber(engine, callback=on_trade)
+    await sub.connect()
+    await sub.subscribe("trade")
+
+    # Run listener in background
+    listen_task = asyncio.create_task(sub.listen())
+
+    # Stop after 60 seconds
+    await asyncio.sleep(60)
+    sub.stop()
+    await listen_task
+    await sub.close()
+```
+
+---
+
+## 31. TLS with registry and pools
+
+```python
+# TLS connections work across all features
+equities = EngineRegistry.from_dsn({
+    "rdb": "kdb+tls://svc_eq:secret@eq-rdb:5010",
+    "hdb": "kdb+tls://svc_eq:secret@eq-hdb:5012",
+})
+
+# Session over TLS
+with equities.session("rdb") as s:
+    Trade = s.reflect("trade")
+    result = s.exec(Trade.select().limit(10))
+
+# Pool over TLS (health checks also work over TLS)
+with equities.pool("rdb", min_size=2, max_size=5) as pool:
+    conn = pool.acquire()
+    try:
+        print(conn.ping())  # True
+        result = conn.query("select from trade where i<5")
+    finally:
+        pool.release(conn)
 ```

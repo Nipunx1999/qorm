@@ -94,9 +94,18 @@ with Session(engine) as s:
   - [EngineRegistry](#engineregistry)
   - [EngineGroup](#enginegroup)
   - [Configuration Methods](#configuration-methods)
+- [TLS/SSL](#tlsssl)
+  - [Enabling TLS](#enabling-tls)
+  - [TLS DSN Scheme](#tls-dsn-scheme)
+  - [Custom SSL Context](#custom-ssl-context)
 - [Connection Pools](#connection-pools)
   - [Sync Pool](#sync-pool)
   - [Async Pool](#async-pool)
+  - [Health Checks](#health-checks)
+  - [Pool from Registry](#pool-from-registry)
+- [Subscription / Pub-Sub](#subscription--pub-sub)
+- [Debug / Explain Mode](#debug--explain-mode)
+- [Logging](#logging)
 - [Schema Management](#schema-management)
 - [Error Handling](#error-handling)
 - [Testing Your Code](#testing-your-code)
@@ -424,13 +433,20 @@ with SyncConnection(host="localhost", port=5000) as conn:
 
 **Constructor parameters:**
 
-| Parameter  | Type             | Default       | Description                |
-|------------|------------------|---------------|----------------------------|
-| `host`     | `str`            | `"localhost"` | kdb+ host                  |
-| `port`     | `int`            | `5000`        | kdb+ port                  |
-| `username` | `str`            | `""`          | Authentication username    |
-| `password` | `str`            | `""`          | Authentication password    |
-| `timeout`  | `float \| None`  | `None`        | Socket timeout in seconds  |
+| Parameter     | Type                     | Default       | Description                   |
+|---------------|--------------------------|---------------|-------------------------------|
+| `host`        | `str`                    | `"localhost"` | kdb+ host                     |
+| `port`        | `int`                    | `5000`        | kdb+ port                     |
+| `username`    | `str`                    | `""`          | Authentication username       |
+| `password`    | `str`                    | `""`          | Authentication password       |
+| `timeout`     | `float \| None`          | `None`        | Socket timeout in seconds     |
+| `tls_context` | `ssl.SSLContext \| None`  | `None`        | SSL context for TLS (use `Engine` to set this automatically) |
+
+**Health check:**
+
+```python
+conn.ping()  # True if connection is alive, False otherwise
+```
 
 ### Asynchronous Connection
 
@@ -480,10 +496,11 @@ Parse a connection string:
 
 ```python
 engine = Engine.from_dsn("kdb://user:pass@localhost:5000")
-engine = Engine.from_dsn("kdb://localhost:5000")          # no auth
+engine = Engine.from_dsn("kdb://localhost:5000")                # no auth
+engine = Engine.from_dsn("kdb+tls://user:pass@kdb-server:5000") # with TLS
 ```
 
-**Format:** `kdb://[user:pass@]host:port`
+**Format:** `kdb://[user:pass@]host:port` or `kdb+tls://[user:pass@]host:port`
 
 ### Creating Connections
 
@@ -888,7 +905,7 @@ with Session(engine) as s:
 
 ### Reflecting a Table
 
-`reflect()` queries the kdb+ process with `meta`, parses the column names and types, and builds a fully functional Model class dynamically:
+`reflect()` queries the kdb+ process with `meta` (for column types) and `keys` (for key columns), then builds a fully functional Model class dynamically:
 
 ```python
 with Session(engine) as s:
@@ -896,6 +913,21 @@ with Session(engine) as s:
 
     # Trade is now a real Model class with the correct fields
     print(Trade.__fields__)  # {'sym': Field(sym, symbol), 'price': Field(price, float), ...}
+```
+
+### Keyed Table Reflection
+
+If the table has key columns, `reflect()` automatically returns a `KeyedModel`:
+
+```python
+with Session(engine) as s:
+    DailyPrice = s.reflect("daily_price")
+
+    # Keyed tables become KeyedModel subclasses
+    from qorm import KeyedModel
+    print(issubclass(DailyPrice, KeyedModel))  # True
+    print(DailyPrice.key_columns())            # ['sym', 'date']
+    print(DailyPrice.value_columns())          # ['close', 'volume']
 ```
 
 ### Reflecting All Tables
@@ -907,6 +939,17 @@ with Session(engine) as s:
 
     Trade = models['trade']
     Quote = models['quote']
+```
+
+### Uppercase Type Chars
+
+kdb+ uses uppercase type characters (e.g. `C`, `J`, `F`) for vector-of-vector columns (list of string vectors, list of long vectors, etc.). qorm handles these automatically during reflection — they are mapped to `MIXED_LIST` (Python `list`):
+
+```python
+with Session(engine) as s:
+    # Table with a 'C' column (list of char vectors / strings)
+    Tagged = s.reflect("tagged")
+    print(Tagged.__fields__['labels'].qtype.code)  # QTypeCode.MIXED_LIST
 ```
 
 ### Using Reflected Models
@@ -1096,6 +1139,56 @@ group = EngineGroup.from_config({
 
 ---
 
+## TLS/SSL
+
+qorm supports encrypted connections to kdb+ processes running with TLS enabled.
+
+### Enabling TLS
+
+```python
+from qorm import Engine
+
+# Enable TLS with system CA verification
+engine = Engine(host="kdb-server", port=5000, tls=True)
+
+# Disable certificate verification (self-signed certs, dev environments)
+engine = Engine(host="kdb-server", port=5000, tls=True, tls_verify=False)
+```
+
+### TLS DSN Scheme
+
+Use the `kdb+tls://` scheme in DSN strings:
+
+```python
+engine = Engine.from_dsn("kdb+tls://user:pass@kdb-server:5000")
+```
+
+### Custom SSL Context
+
+For advanced TLS configuration (client certificates, custom CA bundles):
+
+```python
+import ssl
+
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.load_cert_chain("client.crt", "client.key")
+ctx.load_verify_locations("ca-bundle.crt")
+
+engine = Engine(host="kdb-server", port=5000, tls=True, tls_context=ctx)
+```
+
+**Engine TLS parameters:**
+
+| Parameter     | Type                      | Default | Description                          |
+|---------------|---------------------------|---------|--------------------------------------|
+| `tls`         | `bool`                    | `False` | Enable TLS encryption                |
+| `tls_context` | `ssl.SSLContext \| None`  | `None`  | Custom SSL context (auto-created if `None`) |
+| `tls_verify`  | `bool`                    | `True`  | Verify server certificate            |
+
+TLS is passed through to both sync and async connections, as well as connection pools.
+
+---
+
 ## Connection Pools
 
 For applications that need multiple concurrent connections.
@@ -1130,13 +1223,168 @@ async with AsyncPool(engine, min_size=2, max_size=10) as pool:
 
 **Pool parameters:**
 
-| Parameter  | Type    | Default | Description                             |
-|------------|---------|---------|------------------------------------------|
-| `min_size` | `int`   | `1`     | Connections created on startup           |
-| `max_size` | `int`   | `10`    | Maximum pool size                        |
-| `timeout`  | `float` | `30.0`  | Seconds to wait for a connection         |
+| Parameter           | Type    | Default | Description                             |
+|---------------------|---------|---------|------------------------------------------|
+| `min_size`          | `int`   | `1`     | Connections created on startup           |
+| `max_size`          | `int`   | `10`    | Maximum pool size                        |
+| `timeout`           | `float` | `30.0`  | Seconds to wait for a connection         |
+| `check_on_acquire`  | `bool`  | `True`  | Health-check connections before returning |
 
 If the pool is exhausted, `acquire()` raises `PoolExhaustedError` after `timeout` seconds.
+
+### Health Checks
+
+Pools automatically detect and replace dead connections. When `check_on_acquire=True` (the default), each `acquire()` verifies the connection is still open. If a connection has been dropped by the server, it is replaced transparently.
+
+You can also manually check connection health:
+
+```python
+conn = engine.connect()
+conn.open()
+
+if conn.ping():
+    print("connection is alive")
+else:
+    print("connection is stale")
+```
+
+### Pool from Registry
+
+Create pools directly from an `EngineRegistry`:
+
+```python
+equities = EngineRegistry.from_config({
+    "rdb": {"host": "eq-rdb", "port": 5010},
+    "hdb": {"host": "eq-hdb", "port": 5012},
+})
+
+# Create a sync pool for the RDB
+with equities.pool("rdb", min_size=2, max_size=10) as pool:
+    conn = pool.acquire()
+    try:
+        result = conn.query("select from trade")
+    finally:
+        pool.release(conn)
+```
+
+---
+
+## Subscription / Pub-Sub
+
+Subscribe to real-time data from a kdb+ tickerplant using the `.u.sub` pattern.
+
+```python
+import asyncio
+from qorm import Engine, Subscriber
+
+engine = Engine(host="tickerplant", port=5010)
+
+async def on_trade(table_name, data):
+    print(f"Got update for {table_name}: {len(data)} rows")
+
+async def main():
+    sub = Subscriber(engine, callback=on_trade)
+    await sub.subscribe("trade", ["AAPL", "MSFT"])
+    await sub.listen()  # blocks, calling on_trade for each update
+
+asyncio.run(main())
+```
+
+Or use the async context manager:
+
+```python
+async with Subscriber(engine, callback=on_trade) as sub:
+    await sub.subscribe("trade")       # all symbols
+    await sub.subscribe("quote", ["AAPL"])
+    await sub.listen()
+```
+
+**Subscriber methods:**
+
+| Method                          | Description                                |
+|---------------------------------|--------------------------------------------|
+| `await connect()`              | Open connection to tickerplant             |
+| `await subscribe(table, syms)` | Subscribe to a table (empty syms = all)    |
+| `await listen()`               | Listen for updates (blocks until stopped)  |
+| `stop()`                       | Signal the listener to stop                |
+| `await close()`                | Stop listening and close the connection    |
+
+The callback receives `(table_name: str, data: Any)` and can be either sync or async.
+
+---
+
+## Debug / Explain Mode
+
+Every query builder has an `.explain()` method that returns an annotated string showing the compiled q without executing it. Useful for debugging and understanding what qorm generates.
+
+```python
+query = Trade.select(Trade.sym, avg_price=avg_(Trade.price)).by(Trade.sym)
+print(query.explain())
+# -- SelectQuery on `trade
+# ?[trade;();(enlist `sym)!enlist `sym;`avg_price`sym!(`avg;`price)]
+```
+
+Works on all query types:
+
+```python
+# Select
+Trade.select().where(Trade.price > 100).explain()
+
+# Update
+Trade.update().set(price=100.0).where(Trade.sym == "AAPL").explain()
+
+# Delete
+Trade.delete().where(Trade.sym == "OLD").explain()
+
+# Insert
+Trade.insert(trades).explain()
+
+# Joins
+aj([Trade.sym, Trade.time], Trade, Quote).explain()
+```
+
+---
+
+## Logging
+
+qorm uses Python's standard `logging` module. All log messages go through named loggers so you can configure verbosity per subsystem.
+
+**Logger names:**
+
+| Logger               | Logs                                       |
+|----------------------|--------------------------------------------|
+| `qorm`               | Session operations (exec, raw, call) with query text and timing |
+| `qorm.connection`    | Connection open/close events               |
+| `qorm.pool`          | Pool acquire/release, health checks        |
+| `qorm.subscription`  | Subscriber connect, subscribe, updates     |
+
+**Enable debug logging:**
+
+```python
+import logging
+
+# See everything
+logging.basicConfig(level=logging.DEBUG)
+
+# Or just qorm
+logging.getLogger("qorm").setLevel(logging.DEBUG)
+
+# Only pool activity
+logging.getLogger("qorm.pool").setLevel(logging.DEBUG)
+```
+
+**Example output:**
+
+```
+DEBUG qorm: exec: ?[trade;enlist ((price>100));0b;()]
+DEBUG qorm: exec completed in 2.341ms
+DEBUG qorm: call: getSnapshot('AAPL')
+DEBUG qorm: call completed in 1.024ms
+DEBUG qorm.pool: Acquired connection (pool size: 5)
+DEBUG qorm.subscription: Subscribed to trade (syms=['AAPL', 'MSFT'])
+```
+
+All session methods (`raw()`, `exec()`, `call()`) automatically log the query text and execution time in milliseconds at the DEBUG level.
 
 ---
 
@@ -1325,6 +1573,9 @@ from qorm import (
 
     # Connections & Pools
     SyncConnection, AsyncConnection, SyncPool, AsyncPool,
+
+    # Subscription
+    Subscriber,
 
     # Exceptions
     QormError, ConnectionError, HandshakeError, AuthenticationError,
