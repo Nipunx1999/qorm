@@ -25,23 +25,23 @@ class TestTemporalHelpers:
 
         cls.Trade = Trade
 
-    def test_xbar_compiles_infix(self):
+    def test_xbar_compiles_parse_tree(self):
         expr = xbar_(5, Column('time'))
         result = compile_expr(expr)
-        assert result == '(5 xbar time)'
+        assert result == '(xbar;5;`time)'
 
     def test_xbar_in_by_with_alias(self):
         q = (self.Trade.select(self.Trade.sym, vwap=avg_(self.Trade.price))
              .by(self.Trade.sym, t=xbar_(5, self.Trade.time))
              .compile())
-        assert '5 xbar time' in q
-        assert 't:' in q
-        assert 'sym:sym' in q
+        assert '(xbar;5;`time)' in q
+        assert '`t' in q
+        assert '`sym' in q
 
     def test_xbar_in_where(self):
         expr = xbar_(1, Column('time')) > 100
         result = compile_expr(expr)
-        assert '1 xbar time' in result
+        assert '(xbar;1;`time)' in result
         assert '100' in result
 
     def test_today_compiles_to_zd(self):
@@ -59,4 +59,4 @@ class TestTemporalHelpers:
              .where(self.Trade.time > today_())
              .compile())
         assert '.z.d' in q
-        assert 'time' in q
+        assert '`time' in q

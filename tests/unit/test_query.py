@@ -44,22 +44,21 @@ class TestSelectQuery(_TestModels):
     def test_select_columns(self):
         q = self.Trade.select(self.Trade.sym, self.Trade.price).compile()
         assert '?[trade;' in q
-        assert 'sym:sym' in q
-        assert 'price:price' in q
+        assert '`sym' in q
+        assert '`price' in q
 
     def test_select_with_where(self):
         q = self.Trade.select().where(self.Trade.price > 100).compile()
         assert '?[trade;' in q
-        assert 'price' in q
-        assert '100' in q
+        assert '(>;`price;100)' in q
 
     def test_select_with_multiple_where(self):
         q = (self.Trade.select()
              .where(self.Trade.price > 100)
              .where(self.Trade.size > 50)
              .compile())
-        assert 'price' in q
-        assert 'size' in q
+        assert '(>;`price;100)' in q
+        assert '(>;`size;50)' in q
 
     def test_select_with_by(self):
         q = (self.Trade.select(
@@ -68,8 +67,8 @@ class TestSelectQuery(_TestModels):
              .by(self.Trade.sym)
              .compile())
         assert '?[trade;' in q
-        assert 'sym:sym' in q
-        assert 'avg price' in q or 'avg_price' in q
+        assert '`sym' in q
+        assert '(avg;`price)' in q
 
     def test_select_with_aggregates(self):
         q = (self.Trade.select(
@@ -77,8 +76,8 @@ class TestSelectQuery(_TestModels):
                  avg_price=avg_(self.Trade.price))
              .by(self.Trade.sym)
              .compile())
-        assert 'sum size' in q or 'total' in q
-        assert 'avg price' in q or 'avg_price' in q
+        assert '(sum;`size)' in q
+        assert '(avg;`price)' in q
 
     def test_select_with_limit(self):
         q = self.Trade.select().limit(10).compile()
@@ -86,7 +85,19 @@ class TestSelectQuery(_TestModels):
 
     def test_select_named_columns(self):
         q = self.Trade.select(avg_price=avg_(self.Trade.price)).compile()
-        assert 'avg_price:avg price' in q
+        assert '`avg_price' in q
+        assert '(avg;`price)' in q
+
+    def test_select_single_column_uses_enlist(self):
+        q = self.Trade.select(self.Trade.sym).compile()
+        assert '(enlist `sym)!(enlist `sym)' in q
+
+    def test_select_where_parse_tree_format(self):
+        """Verify the exact parse tree format for WHERE."""
+        q = (self.Trade.select(self.Trade.sym)
+             .where(self.Trade.price == "2026.02.17")
+             .compile())
+        assert 'enlist (=;`price;2026.02.17)' in q
 
 
 class TestUpdateQuery(_TestModels):
@@ -95,7 +106,7 @@ class TestUpdateQuery(_TestModels):
              .set(price=100.0)
              .compile())
         assert '![trade;' in q
-        assert 'price' in q
+        assert '`price' in q
 
     def test_update_with_expression(self):
         q = (self.Trade.update()
@@ -103,14 +114,14 @@ class TestUpdateQuery(_TestModels):
              .where(self.Trade.sym == "AAPL")
              .compile())
         assert '![trade;' in q
-        assert 'price' in q
+        assert '`price' in q
 
     def test_update_multiple_columns(self):
         q = (self.Trade.update()
              .set(price=100.0, size=50)
              .compile())
-        assert 'price' in q
-        assert 'size' in q
+        assert '`price' in q
+        assert '`size' in q
 
 
 class TestDeleteQuery(_TestModels):
@@ -119,7 +130,7 @@ class TestDeleteQuery(_TestModels):
              .where(self.Trade.sym == "AAPL")
              .compile())
         assert '![trade;' in q
-        assert 'sym' in q
+        assert '`sym' in q
         assert '0b' in q
 
     def test_delete_columns(self):

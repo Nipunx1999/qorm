@@ -99,7 +99,7 @@ class TestExprMethods:
 
 class TestCompileExpr:
     def test_column(self):
-        assert compile_expr(Column('price')) == 'price'
+        assert compile_expr(Column('price')) == '`price'
 
     def test_literal_int(self):
         assert compile_expr(Literal(42)) == '42'
@@ -124,32 +124,51 @@ class TestCompileExpr:
     def test_binop(self):
         expr = Column('price') > Literal(100)
         result = compile_expr(expr)
-        assert result == '(price>100)'
+        assert result == '(>;`price;100)'
 
     def test_nested_binop(self):
         expr = (Column('price') + Literal(10)) * Literal(2)
         result = compile_expr(expr)
-        assert '(price+10)' in result
+        assert result == '(*;(+;`price;10);2)'
 
     def test_unary_neg(self):
         expr = -Column('price')
         result = compile_expr(expr)
-        assert result == '(neg price)'
+        assert result == '(neg;`price)'
 
     def test_agg_avg(self):
         expr = avg_(Column('price'))
         result = compile_expr(expr)
-        assert result == 'avg price'
+        assert result == '(avg;`price)'
 
     def test_agg_sum(self):
         expr = sum_(Column('size'))
         result = compile_expr(expr)
-        assert result == 'sum size'
+        assert result == '(sum;`size)'
 
     def test_agg_count(self):
         expr = count_()
         result = compile_expr(expr)
-        assert result == 'count i'
+        assert result == '(count;`i)'
+
+    def test_literal_date_string(self):
+        result = compile_expr(Literal("2026.02.17"))
+        assert result == '2026.02.17'
+
+    def test_literal_datetime_date(self):
+        import datetime
+        result = compile_expr(Literal(datetime.date(2026, 2, 17)))
+        assert result == '2026.02.17'
+
+    def test_literal_datetime_datetime(self):
+        import datetime
+        result = compile_expr(Literal(datetime.datetime(2026, 2, 17, 12, 30, 0)))
+        assert '2026.02.17D12:30:00' in result
+
+    def test_literal_timedelta(self):
+        import datetime
+        result = compile_expr(Literal(datetime.timedelta(hours=1, minutes=30)))
+        assert '0D01:30:00' in result
 
 
 class TestCompileWhere:
@@ -160,13 +179,14 @@ class TestCompileWhere:
         expr = Column('price') > Literal(100)
         result = compile_where([expr])
         assert 'enlist' in result
+        assert '(>;`price;100)' in result
 
     def test_multiple(self):
         e1 = Column('price') > Literal(100)
         e2 = Column('size') > Literal(50)
         result = compile_where([e1, e2])
-        assert 'price' in result
-        assert 'size' in result
+        assert '(>;`price;100)' in result
+        assert '(>;`size;50)' in result
 
 
 class TestCompileBy:
@@ -175,7 +195,7 @@ class TestCompileBy:
 
     def test_single_column(self):
         result = compile_by([Column('sym')])
-        assert 'sym:sym' in result
+        assert result == '(enlist `sym)!(enlist `sym)'
 
 
 class TestModelColumnAccess:

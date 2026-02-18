@@ -28,31 +28,32 @@ class TestEachPeach:
     def test_count_each(self):
         expr = count_(Column('tags')).each()
         result = compile_expr(expr)
-        assert result == 'count tags each'
+        assert result == "(';count;`tags)"
 
     def test_avg_peach(self):
         expr = avg_(Column('prices')).peach()
         result = compile_expr(expr)
-        assert result == 'avg prices peach'
+        assert result == "(peach;avg;`prices)"
 
     def test_each_standalone(self):
         expr = each_("count", Column('tags'))
         assert isinstance(expr, EachExpr)
         result = compile_expr(expr)
-        assert result == 'count tags each'
+        assert result == "(';count;`tags)"
 
     def test_peach_standalone(self):
         expr = peach_("sum", Column('sizes'))
         result = compile_expr(expr)
-        assert result == 'sum sizes peach'
+        assert result == "(peach;sum;`sizes)"
 
     def test_each_in_select_named(self):
         q = (self.Trade.select(self.Trade.sym, tag_count=each_("count", Column('tags')))
              .compile())
-        assert 'tag_count:count tags each' in q
+        assert '`tag_count' in q
+        assert "(';count;`tags)" in q
 
     def test_each_chained_with_comparison(self):
         expr = each_("count", Column('tags')) > 5
         result = compile_expr(expr)
-        assert 'count tags each' in result
+        assert "(';count;`tags)" in result
         assert '5' in result
