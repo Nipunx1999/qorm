@@ -17,8 +17,9 @@ from qorm.query.expressions import Column
 
 
 class TestCharToQTypeCode:
-    def test_all_18_types_mapped(self):
+    def test_all_19_types_mapped(self):
         expected = {
+            ' ': QTypeCode.MIXED_LIST,
             'b': QTypeCode.BOOLEAN,
             'g': QTypeCode.GUID,
             'x': QTypeCode.BYTE,
@@ -266,3 +267,91 @@ class TestSessionReflection:
         t = Trade(sym="AAPL", price=150.0)
         d = t.to_dict()
         assert d == {'sym': 'AAPL', 'price': 150.0}
+
+    def test_reflect_table_with_list_column(self):
+        """Reflect a table that has a mixed/nested list column (type char ' ')."""
+        s = self._make_session()
+        s._conn.query.return_value = {
+            'c': ['sym', 'price', 'tags'],
+            't': ['s', 'f', ' '],
+            'f': ['', '', ''],
+            'a': ['', '', ''],
+        }
+
+        M = s.reflect("order")
+        assert M.__tablename__ == 'order'
+        assert set(M.__fields__) == {'sym', 'price', 'tags'}
+        assert M.__fields__['tags'].qtype.code == QTypeCode.MIXED_LIST
+        assert M.__fields__['tags'].qtype.python_type == list
+
+
+class TestListColumnSupport:
+    def test_reflect_space_char_maps_to_mixed_list(self):
+        meta = {'c': ['data'], 't': [' '], 'f': [''], 'a': ['']}
+        M = build_model_from_meta('nested', meta)
+        assert M.__fields__['data'].qtype.code == QTypeCode.MIXED_LIST
+
+    def test_list_field_type_char(self):
+        meta = {'c': ['data'], 't': [' '], 'f': [''], 'a': ['']}
+        M = build_model_from_meta('nested', meta)
+        assert M.__fields__['data'].q_type_char == ' '
+
+    def test_list_column_instantiation(self):
+        meta = {'c': ['sym', 'fills'], 't': ['s', ' '], 'f': ['', ''], 'a': ['', '']}
+        Order = build_model_from_meta('order', meta)
+        o = Order(sym="AAPL", fills=[100.5, 200.3, 50.1])
+        assert o.sym == "AAPL"
+        assert o.fills == [100.5, 200.3, 50.1]
+
+    def test_list_column_to_dict(self):
+        meta = {'c': ['sym', 'fills'], 't': ['s', ' '], 'f': ['', ''], 'a': ['', '']}
+        Order = build_model_from_meta('order', meta)
+        o = Order(sym="AAPL", fills=[100.5, 200.3])
+        assert o.to_dict() == {'sym': 'AAPL', 'fills': [100.5, 200.3]}
+
+    def test_infer_qtype_from_list(self):
+        from qorm.types.coerce import infer_qtype
+        qt = infer_qtype(list)
+        assert qt.code == QTypeCode.MIXED_LIST
+        assert qt.python_type == list
+
+    def test_annotated_list_type(self):
+        from qorm.types import List
+        from qorm.types.coerce import infer_qtype
+        qt = infer_qtype(List)
+        assert qt.code == QTypeCode.MIXED_LIST
+
+    def test_hand_defined_model_with_list(self):
+        from qorm import Model
+        from qorm.types import List, Symbol
+        from qorm.model.meta import clear_registry
+
+        clear_registry()
+
+        class Order(Model):
+            __tablename__ = 'order_list_test'
+            sym: Symbol
+            fills: List
+
+        assert Order.__fields__['fills'].qtype.code == QTypeCode.MIXED_LIST
+        assert Order.__fields__['fills'].q_type_char == ' '
+
+    def test_ddl_for_list_column(self):
+        from qorm import Model
+        from qorm.types import List, Symbol, Float
+        from qorm.model.meta import clear_registry
+        from qorm.model.schema import create_table_q
+
+        clear_registry()
+
+        class Order(Model):
+            __tablename__ = 'order_ddl_test'
+            sym: Symbol
+            price: Float
+            tags: List
+
+        q = create_table_q(Order)
+        # list columns use () not `<type>$()
+        assert 'tags:()' in q
+        assert 'sym:`s$()' in q
+        assert 'price:`f$()' in q

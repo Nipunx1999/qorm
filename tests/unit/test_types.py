@@ -43,7 +43,7 @@ class TestQTypeRegistry:
     def test_all_types(self):
         from qorm.types.base import all_types
         types = all_types()
-        assert len(types) == 18  # 19 minus deprecated? no, all 18 registered
+        assert len(types) == 19  # 18 atom types + mixed list
 
 
 class TestInferQType:

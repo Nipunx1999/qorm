@@ -1,4 +1,4 @@
-"""All 19 q atom type descriptors."""
+"""All q type descriptors: 18 atom types plus the mixed/general list type."""
 
 from __future__ import annotations
 
@@ -7,6 +7,13 @@ import uuid
 
 from ..protocol.constants import QTypeCode, GUID_SIZE, TYPE_STRUCT
 from .base import QType, register_type
+
+# ── Mixed / general list type ────────────────────────────────────
+
+q_list = register_type(QType(
+    code=QTypeCode.MIXED_LIST, name="list",
+    python_type=list, size=0,
+))
 
 # ── Register all atom types ───────────────────────────────────────
 

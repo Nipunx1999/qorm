@@ -12,6 +12,7 @@ from ..types.base import get_type_by_code
 
 # ── q type char → QTypeCode reverse map ─────────────────────────────
 _CHAR_TO_QTYPE_CODE: dict[str, QTypeCode] = {
+    ' ': QTypeCode.MIXED_LIST,   # nested / mixed list column
     'b': QTypeCode.BOOLEAN,
     'g': QTypeCode.GUID,
     'x': QTypeCode.BYTE,

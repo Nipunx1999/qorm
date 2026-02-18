@@ -41,7 +41,11 @@ def create_table_q(model: type[Model]) -> str:
     for name, fld in fields.items():
         attr_str = _attr_prefix(fld.attr)
         type_char = fld.q_type_char
-        col_def = f"{name}:{attr_str}`{type_char}$()"
+        if type_char == ' ':
+            # Mixed/general list column — use empty list literal
+            col_def = f"{name}:{attr_str}()"
+        else:
+            col_def = f"{name}:{attr_str}`{type_char}$()"
 
         if name in key_fields:
             key_parts.append(col_def)

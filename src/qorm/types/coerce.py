@@ -21,6 +21,7 @@ _PYTHON_TO_QTYPE: dict[type, QTypeCode] = {
     float: QTypeCode.FLOAT,
     str: QTypeCode.SYMBOL,       # default string -> symbol
     bytes: QTypeCode.BYTE,
+    list: QTypeCode.MIXED_LIST,  # nested / mixed list column
     datetime.datetime: QTypeCode.TIMESTAMP,
     datetime.date: QTypeCode.DATE,
     datetime.time: QTypeCode.TIME,

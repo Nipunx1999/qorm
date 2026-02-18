@@ -29,7 +29,9 @@ from .types import (
     Real, Float, Char, Symbol,
     Timestamp, Month, Date, DateTime,
     Timespan, Minute, Second, Time,
+    List,
     QType, QTypeCode, QNull,
+    q_list,
     q_boolean, q_guid, q_byte, q_short, q_int, q_long,
     q_real, q_float, q_char, q_symbol, q_timestamp, q_month,
     q_date, q_datetime, q_timespan, q_minute, q_second, q_time,
@@ -76,6 +78,7 @@ __all__ = [
     'Real', 'Float', 'Char', 'Symbol',
     'Timestamp', 'Month', 'Date', 'DateTime',
     'Timespan', 'Minute', 'Second', 'Time',
+    'List',
     'QType', 'QTypeCode', 'QNull',
     'infer_qtype', 'is_null',
     # Queries

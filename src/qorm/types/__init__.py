@@ -19,6 +19,7 @@ from typing import Annotated
 
 from .base import QType, QTypeCode, get_type_by_code, get_type_by_name, all_types
 from .atoms import (
+    q_list,
     q_boolean, q_guid, q_byte, q_short, q_int, q_long,
     q_real, q_float, q_char, q_symbol, q_timestamp, q_month,
     q_date, q_datetime, q_timespan, q_minute, q_second, q_time,
@@ -56,6 +57,7 @@ Timespan = Annotated[datetime.timedelta, q_timespan]
 Minute = Annotated[datetime.time, q_minute]
 Second = Annotated[datetime.time, q_second]
 Time = Annotated[datetime.time, q_time]
+List = Annotated[list, q_list]
 
 __all__ = [
     # Type aliases
@@ -63,8 +65,10 @@ __all__ = [
     'Real', 'Float', 'Char', 'Symbol',
     'Timestamp', 'Month', 'Date', 'DateTime',
     'Timespan', 'Minute', 'Second', 'Time',
+    'List',
     # QType descriptors
     'QType', 'QTypeCode', 'QNull',
+    'q_list',
     'q_boolean', 'q_guid', 'q_byte', 'q_short', 'q_int', 'q_long',
     'q_real', 'q_float', 'q_char', 'q_symbol', 'q_timestamp', 'q_month',
     'q_date', 'q_datetime', 'q_timespan', 'q_minute', 'q_second', 'q_time',

@@ -49,6 +49,7 @@ class Field:
     def q_type_char(self) -> str:
         """Single-character q type identifier for DDL."""
         _TYPE_CHARS = {
+            QTypeCode.MIXED_LIST: ' ',
             QTypeCode.BOOLEAN: 'b',
             QTypeCode.GUID: 'g',
             QTypeCode.BYTE: 'x',
