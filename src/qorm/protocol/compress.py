@@ -1,12 +1,19 @@
 """IPC compression for q/kdb+.
 
-kdb+ IPC uses a custom compression algorithm based on hash-table lookups
-of 2-byte patterns.  The compressed format has:
-- 8 bytes: uncompressed length (little-endian int)
-- Remaining: compressed data stream with control bytes and literal/reference ops
+kdb+ IPC uses a custom LZ-style compression algorithm with a 256-entry
+hash table keyed by XOR of consecutive byte pairs.
 
-When the IPC header byte 2 is set, the payload after the header is compressed.
-The uncompressed data includes the original 8-byte header.
+Compressed payload format (after the 8-byte IPC header):
+- Bytes 0-3: uncompressed total length (little-endian int32),
+  includes the original 8-byte IPC header
+- Bytes 4-7: initial hash cursor position (little-endian int32)
+- Bytes 8+:  compressed bitstream
+
+The decompressed output positions 0-7 correspond to the original
+IPC header and must be reconstructed by the caller or via the
+``header_bytes`` parameter.
+
+Algorithm based on the kx c.java reference implementation.
 """
 
 from __future__ import annotations
@@ -15,7 +22,7 @@ import struct
 
 
 def compress(data: bytes, level: int = 0) -> bytes:
-    """Compress an IPC payload using q's compression algorithm.
+    """Compress an IPC message using the kdb+ compression algorithm.
 
     Parameters
     ----------
@@ -23,149 +30,170 @@ def compress(data: bytes, level: int = 0) -> bytes:
         The raw IPC message (including 8-byte header) to compress.
     level : int
         Compression level hint (0 = no compression, >0 = compress).
-        Level is primarily a flag; actual compression uses the standard
-        kdb+ algorithm.
 
     Returns
     -------
     bytes
-        Compressed payload (or original data if compression isn't beneficial).
+        Compressed payload suitable for sending after a compressed IPC
+        header, or the original *data* if compression is not beneficial.
     """
-    if level <= 0 or len(data) < 32:
+    if level <= 0 or len(data) <= 17:
         return data
 
     n = len(data)
-    # Hash table for pattern matching (12-bit hash → position)
-    hash_table = [0] * 4096
-    compressed = bytearray()
+    aa = [0] * 256  # hash table: XOR hash → position in data
 
-    # Compressed header: original uncompressed length
-    compressed.extend(struct.pack('<i', n))
+    s = 8   # source position in input (skip header)
+    d = s   # hash cursor — starts at s to skip header bytes
 
-    src = 0
-    ctrl_pos = len(compressed)
-    compressed.append(0)  # control byte placeholder
-    ctrl_bit = 0
-    ctrl_byte = 0
+    out = bytearray()
 
-    dst_start = len(compressed)
+    # 8-byte compression sub-header
+    out.extend(struct.pack('<i', n))  # uncompressed total length
+    out.extend(struct.pack('<i', d))  # initial hash cursor position
+    i = 0   # bit multiplier (0 means need fresh control byte)
+    f = 0   # control byte accumulator
+    f_pos = len(out)
+    out.append(0)  # control byte placeholder
 
-    while src < n:
-        if ctrl_bit == 8:
-            compressed[ctrl_pos] = ctrl_byte
-            ctrl_pos = len(compressed)
-            compressed.append(0)
-            ctrl_bit = 0
-            ctrl_byte = 0
+    while s < n:
+        if i == 256:
+            out[f_pos] = f
+            f_pos = len(out)
+            out.append(0)
+            i = 1
+            f = 0
+        elif i == 0:
+            i = 1
 
-        if src + 1 < n:
-            h = ((data[src] ^ data[src + 1]) * 257) & 0xFFF
-            ref = hash_table[h]
-            hash_table[h] = src
+        # Update hash table up to (but not including) last byte before s
+        while d + 1 < s and d + 1 < n:
+            aa[(data[d] ^ data[d + 1]) & 0xFF] = d
+            d += 1
 
-            if (ref > 0 and ref < src and src - ref < 32768
-                    and ref + 2 < n and data[ref] == data[src]
-                    and data[ref + 1] == data[src + 1]):
-                # Find match length (min 2, max 255+2)
+        # Try to find a back-reference
+        matched = False
+        if s + 1 < n:
+            h = (data[s] ^ data[s + 1]) & 0xFF
+            r = aa[h]
+            if r > 0 and r + 1 < n and data[r] == data[s] and data[r + 1] == data[s + 1]:
+                # Determine match length (min 2, max 257)
                 match_len = 2
-                max_match = min(257, n - src)
-                while match_len < max_match and data[ref + match_len] == data[src + match_len]:
+                max_len = min(257, n - s, n - r)
+                while match_len < max_len and data[r + match_len] == data[s + match_len]:
                     match_len += 1
 
-                offset = src - ref
-                # Encode as back-reference
-                if match_len <= 3 and offset <= 255:
-                    compressed.append(offset & 0xFF)
-                    compressed.append(((match_len - 2) << 4) | 0)
-                else:
-                    compressed.append(offset & 0xFF)
-                    compressed.append(((offset >> 8) & 0x7F) | 0x80)
-                    compressed.append(match_len - 2)
+                # Encode back-reference: [hash_index, extra_length]
+                f |= i
+                out.append(h)
+                out.append(match_len - 2)
 
-                src += match_len
-                ctrl_byte |= (1 << ctrl_bit)
-            else:
-                # Literal byte
-                compressed.append(data[src])
-                src += 1
-        else:
-            compressed.append(data[src])
-            src += 1
+                # Advance: copy 2 bytes worth of hash updates, skip the rest
+                old_s = s
+                s += 2
+                # Hash updates for the 2 explicitly-copied bytes
+                while d + 1 < s and d + 1 < n:
+                    aa[(data[d] ^ data[d + 1]) & 0xFF] = d
+                    d += 1
+                # Skip hash updates for the remaining matched bytes
+                s = old_s + match_len
+                d = s
+                matched = True
 
-        ctrl_bit += 1
+        if not matched:
+            # Literal byte
+            out.append(data[s])
+            s += 1
 
-    compressed[ctrl_pos] = ctrl_byte
+        i *= 2
+
+    out[f_pos] = f
 
     # Only use compressed version if it's actually smaller
-    if len(compressed) + 8 >= n:
+    if len(out) >= n:
         return data
 
-    return bytes(compressed)
+    return bytes(out)
 
 
-def decompress(data: bytes, header_offset: int = 0) -> bytes:
-    """Decompress a q IPC compressed payload.
+def decompress(data: bytes, header_bytes: bytes = b'') -> bytes:
+    """Decompress a kdb+ IPC compressed payload.
 
     Parameters
     ----------
     data : bytes
-        The compressed payload (after the 8-byte IPC header).
-    header_offset : int
-        Offset into data where compression header starts (default 0).
+        The compressed payload (everything after the 8-byte IPC header).
+    header_bytes : bytes, optional
+        The 8-byte IPC header from the compressed message.  Used to
+        reconstruct the original (uncompressed) header in positions 0-7
+        of the output.  If empty, positions 0-7 will be zeroed.
 
     Returns
     -------
     bytes
-        The decompressed payload.
+        The full decompressed IPC message including the 8-byte header.
     """
-    if len(data) < 4:
+    if len(data) < 8:
         return data
 
-    pos = header_offset
-    uncompressed_len = struct.unpack_from('<i', data, pos)[0]
-    pos += 4
+    # Compression sub-header
+    uncompressed_len = struct.unpack_from('<i', data, 0)[0]
+    d = struct.unpack_from('<i', data, 4)[0]
 
-    output = bytearray(uncompressed_len)
-    out_pos = 0
+    dst = bytearray(uncompressed_len)
+    aa = [0] * 256  # hash table: XOR hash → position in output
 
-    while pos < len(data) and out_pos < uncompressed_len:
-        ctrl = data[pos]
-        pos += 1
+    s = 8  # output position (positions 0-7 are the header, filled later)
+    p = 8  # input position (skip compression sub-header)
+    i = 0  # bit multiplier (0 means need fresh control byte)
+    f = 0  # control byte
 
-        for bit in range(8):
-            if pos >= len(data) or out_pos >= uncompressed_len:
-                break
+    while s < uncompressed_len and p < len(data):
+        if i == 0:
+            f = data[p]
+            p += 1
+            i = 1
 
-            if ctrl & (1 << bit):
-                # Back-reference
-                if pos + 1 >= len(data):
-                    break
-                b0 = data[pos]
-                b1 = data[pos + 1]
-                pos += 2
+        if f & i:
+            # Back-reference: look up hash table
+            r = aa[data[p] & 0xFF]
+            p += 1
+            dst[s] = dst[r]
+            s += 1
+            r += 1
+            dst[s] = dst[r]
+            s += 1
+            r += 1
+            n = data[p] & 0xFF
+            p += 1
+            for m in range(n):
+                dst[s + m] = dst[r + m]
+        else:
+            # Literal byte
+            dst[s] = data[p]
+            s += 1
+            p += 1
 
-                if b1 & 0x80:
-                    # Long form
-                    if pos >= len(data):
-                        break
-                    offset = b0 | ((b1 & 0x7F) << 8)
-                    length = data[pos] + 2
-                    pos += 1
-                else:
-                    # Short form
-                    offset = b0
-                    length = ((b1 >> 4) & 0x0F) + 2
+        # Update hash table for new output bytes
+        while d + 1 < s and d + 1 < uncompressed_len:
+            aa[(dst[d] ^ dst[d + 1]) & 0xFF] = d
+            d += 1
 
-                ref_pos = out_pos - offset
-                for i in range(length):
-                    if out_pos >= uncompressed_len:
-                        break
-                    output[out_pos] = output[ref_pos + i]
-                    out_pos += 1
-            else:
-                # Literal byte
-                output[out_pos] = data[pos]
-                out_pos += 1
-                pos += 1
+        if f & i:
+            # Finish back-reference: advance past extra copied bytes
+            s += n
+            d = s
 
-    return bytes(output[:out_pos])
+        i *= 2
+        if i == 256:
+            i = 0
+
+    # Reconstruct the original IPC header in positions 0-7
+    if len(header_bytes) >= 8:
+        dst[0] = header_bytes[0]        # endian
+        dst[1] = header_bytes[1]        # msg_type
+        dst[2] = 0                      # not compressed
+        dst[3] = 0                      # reserved
+        struct.pack_into('<i', dst, 4, uncompressed_len)
+
+    return bytes(dst)

@@ -10,7 +10,7 @@ from qorm.protocol.constants import LITTLE_ENDIAN, RESPONSE_MSG, HEADER_SIZE
 
 class TestCompression:
     def test_no_compress_short_data(self):
-        """Data shorter than 32 bytes should not be compressed."""
+        """Data shorter than 18 bytes should not be compressed."""
         data = b"short"
         result = compress(data, level=1)
         assert result == data
@@ -27,7 +27,7 @@ class TestCompression:
         assert isinstance(result, bytes)
 
     def test_decompress_returns_bytes(self):
-        data = b"hello world"
+        data = b"hello"
         result = decompress(data)
         assert isinstance(result, bytes)
 
@@ -55,39 +55,78 @@ class TestCompressionEdgeCases:
         """Highly compressible data."""
         data = b"\x00" * 1000
         compressed = compress(data, level=1)
-        # Should either be smaller or return original
         assert isinstance(compressed, bytes)
 
     def test_random_like_data(self):
         """Data with no patterns may not compress well."""
         import hashlib
-        data = hashlib.sha256(b"seed").digest() * 10  # 320 bytes, not very compressible
+        data = hashlib.sha256(b"seed").digest() * 10  # 320 bytes
         result = compress(data, level=1)
         assert isinstance(result, bytes)
+
+
+def _make_ipc_message(body: bytes) -> tuple[bytes, bytes]:
+    """Build an IPC message and return (header, full_message)."""
+    total_len = HEADER_SIZE + len(body)
+    header = struct.pack('<BBHi', LITTLE_ENDIAN, RESPONSE_MSG, 0, total_len)
+    return header, header + body
 
 
 class TestCompressDecompressRoundTrip:
     def test_round_trip_recovers_original(self):
         """Compress then decompress should recover the original IPC message."""
         body = b"ABCDEFGH" * 100  # 800 bytes, highly compressible
-        total_len = HEADER_SIZE + len(body)
-        header = struct.pack('<BBHi', LITTLE_ENDIAN, RESPONSE_MSG, 0, total_len)
-        original = header + body
+        header, original = _make_ipc_message(body)
 
         compressed = compress(original, level=1)
         assert compressed != original, "data should actually compress"
-        decompressed = decompress(compressed)
+        decompressed = decompress(compressed, header)
         assert decompressed == original
 
     def test_round_trip_with_varied_payload(self):
         """Round-trip with a payload containing mixed repeated patterns."""
-        # Simulate a serialized table-like payload
         pattern = b"\x00\x01\x02\x03" * 50 + b"trade\x00" * 80
-        total_len = HEADER_SIZE + len(pattern)
-        header = struct.pack('<BBHi', LITTLE_ENDIAN, RESPONSE_MSG, 0, total_len)
-        original = header + pattern
+        header, original = _make_ipc_message(pattern)
 
         compressed = compress(original, level=1)
         if compressed != original:
-            decompressed = decompress(compressed)
+            decompressed = decompress(compressed, header)
             assert decompressed == original
+
+    def test_round_trip_large_payload(self):
+        """Round-trip with a larger payload simulating a table response."""
+        rows = b"".join(
+            struct.pack('<q', i) + b"AAPL\x00" + struct.pack('<d', 150.0 + i * 0.01)
+            for i in range(200)
+        )
+        header, original = _make_ipc_message(rows)
+
+        compressed = compress(original, level=1)
+        if compressed != original:
+            decompressed = decompress(compressed, header)
+            assert decompressed == original
+
+    def test_header_reconstruction(self):
+        """Decompressed output should have the correct IPC header."""
+        body = b"XYZXYZ" * 100
+        header, original = _make_ipc_message(body)
+
+        compressed = compress(original, level=1)
+        assert compressed != original
+
+        # Pass header with compressed flag set (as in real receive path)
+        compressed_header = struct.pack(
+            '<BBHi', LITTLE_ENDIAN, RESPONSE_MSG, 1, len(compressed) + HEADER_SIZE,
+        )
+        decompressed = decompress(compressed, compressed_header)
+
+        # Positions 0-1 should match (endian, msg_type)
+        assert decompressed[0] == LITTLE_ENDIAN
+        assert decompressed[1] == RESPONSE_MSG
+        # Position 2 should be 0 (decompressed = not compressed)
+        assert decompressed[2] == 0
+        # Positions 4-7 should be the uncompressed total length
+        total = struct.unpack_from('<i', decompressed, 4)[0]
+        assert total == len(original)
+        # Body should match
+        assert decompressed[8:] == original[8:]
