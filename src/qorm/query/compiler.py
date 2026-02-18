@@ -11,6 +11,7 @@ from typing import Any
 
 from .expressions import (
     Expr, Column, Literal, BinOp, UnaryOp, FuncCall, AggFunc,
+    FbyExpr, EachExpr, _QSentinel,
 )
 
 
@@ -35,7 +36,7 @@ def compile_expr(expr: Expr) -> str:
 
     if isinstance(expr, FuncCall):
         args = ';'.join(compile_expr(a) for a in expr.args)
-        if expr.func_name in ('like', 'in', 'within'):
+        if expr.func_name in ('like', 'in', 'within', 'xbar'):
             # Infix form
             left = compile_expr(expr.args[0])
             right = compile_expr(expr.args[1])
@@ -46,11 +47,22 @@ def compile_expr(expr: Expr) -> str:
         col = compile_expr(expr.column)
         return f"{expr.func_name} {col}"
 
+    if isinstance(expr, FbyExpr):
+        col = compile_expr(expr.col)
+        group = compile_expr(expr.group_col)
+        return f"({expr.agg_name};{col}) fby {group}"
+
+    if isinstance(expr, EachExpr):
+        inner = compile_expr(expr.func_expr)
+        return f"{inner} {expr.adverb}"
+
     raise ValueError(f"Cannot compile expression: {expr!r}")
 
 
 def _compile_literal(value: Any) -> str:
     """Compile a Python literal to its q representation."""
+    if isinstance(value, _QSentinel):
+        return value.q_repr
     if value is None:
         return '(::)'  # q generic null
     if isinstance(value, bool):
@@ -88,12 +100,15 @@ def compile_where(clauses: list[Expr]) -> str:
     return f'({";".join(parts)})'
 
 
-def compile_by(by_exprs: list[Expr | Column]) -> str:
+def compile_by(
+    by_exprs: list[Expr | Column],
+    named: dict[str, Expr] | None = None,
+) -> str:
     """Compile GROUP BY expressions.
 
     Returns: ([] col1; col2; ...) or 0b for no grouping.
     """
-    if not by_exprs:
+    if not by_exprs and not named:
         return '0b'
     parts = []
     for expr in by_exprs:
@@ -101,6 +116,9 @@ def compile_by(by_exprs: list[Expr | Column]) -> str:
             parts.append(f'{expr.name}:{expr.name}')
         else:
             parts.append(compile_expr(expr))
+    if named:
+        for alias, expr in named.items():
+            parts.append(f'{alias}:{compile_expr(expr)}')
     return f'([] {"; ".join(parts)})'
 
 
@@ -150,6 +168,7 @@ def compile_functional_select(
     by_exprs: list[Expr],
     columns: list[Expr] | None,
     named: dict[str, Expr] | None,
+    by_named: dict[str, Expr] | None = None,
 ) -> str:
     """Compile a full functional select: ?[t;c;b;a].
 
@@ -165,10 +184,12 @@ def compile_functional_select(
         SELECT columns (None = all).
     named : dict[str, Expr] | None
         Named (aliased) select expressions.
+    by_named : dict[str, Expr] | None
+        Named (aliased) GROUP BY expressions.
     """
     t = table
     c = compile_where(where_clauses)
-    b = compile_by(by_exprs)
+    b = compile_by(by_exprs, by_named)
     a = compile_select_columns(columns, named)
     return f'?[{t};{c};{b};{a}]'
 
@@ -205,3 +226,60 @@ def compile_functional_delete(
     else:
         a = '`symbol$()'
     return f'![{t};{c};0b;{a}]'
+
+
+def compile_exec_columns(
+    columns: list[Expr | Column] | None,
+    named: dict[str, Expr] | None = None,
+) -> str:
+    """Compile the exec column list.
+
+    Single column, no alias → atom: ``price``
+    Multiple or named → dict without ``[]``: `` `sym`price!(sym;price) ``
+    """
+    all_parts: list[tuple[str, str]] = []
+
+    if columns:
+        for col in columns:
+            if isinstance(col, Column):
+                all_parts.append((col.name, col.name))
+            elif isinstance(col, AggFunc):
+                compiled = compile_expr(col)
+                col_name = _infer_agg_name(col)
+                all_parts.append((col_name, compiled))
+            else:
+                all_parts.append((compile_expr(col), compile_expr(col)))
+
+    if named:
+        for alias, expr in named.items():
+            all_parts.append((alias, compile_expr(expr)))
+
+    if not all_parts:
+        return '()'
+
+    # Single unnamed column → atom form
+    if len(all_parts) == 1 and not named:
+        name, compiled = all_parts[0]
+        if isinstance(columns[0], Column):
+            return f'`{name}'
+        return compiled
+
+    # Multiple → dict form
+    keys = '`' + '`'.join(name for name, _ in all_parts)
+    vals = ';'.join(compiled for _, compiled in all_parts)
+    return f'{keys}!({vals})'
+
+
+def compile_functional_exec(
+    table: str,
+    where_clauses: list[Expr],
+    by_exprs: list[Expr],
+    columns: list[Expr] | None,
+    named: dict[str, Expr] | None,
+) -> str:
+    """Compile a full functional exec: ?[t;c;b;a] with exec-style columns."""
+    t = table
+    c = compile_where(where_clauses)
+    b = compile_by(by_exprs)
+    a = compile_exec_columns(columns, named)
+    return f'?[{t};{c};{b};{a}]'

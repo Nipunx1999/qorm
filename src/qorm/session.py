@@ -16,6 +16,7 @@ from .query.update import UpdateQuery
 from .query.delete import DeleteQuery
 from .query.insert import InsertQuery
 from .query.joins import JoinQuery
+from .query.exec_ import ExecQuery
 
 if TYPE_CHECKING:
     from .engine import Engine
@@ -109,6 +110,7 @@ class Session:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self._conn: SyncConnection | None = None
+        self._retry = engine.retry
 
     def __enter__(self) -> Session:
         self._conn = self.engine.connect()
@@ -128,21 +130,39 @@ class Session:
             raise RuntimeError("Session is not open. Use 'with Session(engine) as s:'")
         return self._conn
 
+    def _reconnect(self) -> None:
+        """Close stale connection and open a fresh one."""
+        if self._conn:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+        self._conn = self.engine.connect()
+        self._conn.open()
+        log.debug("Session reconnected to %s:%s", self.engine.host, self.engine.port)
+
+    def _with_retry(self, func: Any) -> Any:
+        """Wrap *func* with retry logic if a policy is configured."""
+        if self._retry is None:
+            return func()
+        from .retry import retry_sync
+        return retry_sync(func, self._retry, reconnect_fn=self._reconnect)
+
     def raw(self, q_expr: str, *args: Any) -> Any:
         """Execute a raw q expression."""
         log.debug("raw: %s", q_expr)
         t0 = time.perf_counter()
-        result = self.connection.query(q_expr, *args)
+        result = self._with_retry(lambda: self.connection.query(q_expr, *args))
         elapsed = time.perf_counter() - t0
         log.debug("raw completed in %.3fms", elapsed * 1000)
         return _map_result(result)
 
-    def exec(self, query: SelectQuery | UpdateQuery | DeleteQuery | InsertQuery | JoinQuery) -> Any:
+    def exec(self, query: SelectQuery | UpdateQuery | DeleteQuery | InsertQuery | JoinQuery | ExecQuery) -> Any:
         """Execute a query object and return mapped results."""
         q_str = query.compile()
         log.debug("exec: %s", q_str)
         t0 = time.perf_counter()
-        result = self.connection.query(q_str)
+        result = self._with_retry(lambda: self.connection.query(q_str))
         elapsed = time.perf_counter() - t0
         log.debug("exec completed in %.3fms", elapsed * 1000)
         model = getattr(query, 'model', None)
@@ -157,9 +177,9 @@ class Session:
         log.debug("call: %s(%s)", func_name, ", ".join(repr(a) for a in args))
         t0 = time.perf_counter()
         if args:
-            result = self.connection.query(func_name, *args)
+            result = self._with_retry(lambda: self.connection.query(func_name, *args))
         else:
-            result = self.connection.query(func_name)
+            result = self._with_retry(lambda: self.connection.query(func_name))
         elapsed = time.perf_counter() - t0
         log.debug("call completed in %.3fms", elapsed * 1000)
         return _map_result(result)
@@ -234,6 +254,7 @@ class AsyncSession:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self._conn: AsyncConnection | None = None
+        self._retry = engine.retry
 
     async def __aenter__(self) -> AsyncSession:
         self._conn = self.engine.async_connect()
@@ -253,21 +274,39 @@ class AsyncSession:
             raise RuntimeError("AsyncSession is not open")
         return self._conn
 
+    async def _reconnect(self) -> None:
+        """Close stale connection and open a fresh one."""
+        if self._conn:
+            try:
+                await self._conn.close()
+            except Exception:
+                pass
+        self._conn = self.engine.async_connect()
+        await self._conn.open()
+        log.debug("AsyncSession reconnected to %s:%s", self.engine.host, self.engine.port)
+
+    async def _with_retry(self, func: Any) -> Any:
+        """Wrap async *func* with retry logic if a policy is configured."""
+        if self._retry is None:
+            return await func()
+        from .retry import retry_async
+        return await retry_async(func, self._retry, reconnect_fn=self._reconnect)
+
     async def raw(self, q_expr: str, *args: Any) -> Any:
         """Execute a raw q expression."""
         log.debug("async raw: %s", q_expr)
         t0 = time.perf_counter()
-        result = await self.connection.query(q_expr, *args)
+        result = await self._with_retry(lambda: self.connection.query(q_expr, *args))
         elapsed = time.perf_counter() - t0
         log.debug("async raw completed in %.3fms", elapsed * 1000)
         return _map_result(result)
 
-    async def exec(self, query: SelectQuery | UpdateQuery | DeleteQuery | InsertQuery | JoinQuery) -> Any:
+    async def exec(self, query: SelectQuery | UpdateQuery | DeleteQuery | InsertQuery | JoinQuery | ExecQuery) -> Any:
         """Execute a query object and return mapped results."""
         q_str = query.compile()
         log.debug("async exec: %s", q_str)
         t0 = time.perf_counter()
-        result = await self.connection.query(q_str)
+        result = await self._with_retry(lambda: self.connection.query(q_str))
         elapsed = time.perf_counter() - t0
         log.debug("async exec completed in %.3fms", elapsed * 1000)
         model = getattr(query, 'model', None)
@@ -278,9 +317,9 @@ class AsyncSession:
         log.debug("async call: %s(%s)", func_name, ", ".join(repr(a) for a in args))
         t0 = time.perf_counter()
         if args:
-            result = await self.connection.query(func_name, *args)
+            result = await self._with_retry(lambda: self.connection.query(func_name, *args))
         else:
-            result = await self.connection.query(func_name)
+            result = await self._with_retry(lambda: self.connection.query(func_name))
         elapsed = time.perf_counter() - t0
         log.debug("async call completed in %.3fms", elapsed * 1000)
         return _map_result(result)

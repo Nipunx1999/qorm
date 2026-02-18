@@ -137,6 +137,12 @@ class Model(metaclass=ModelMeta):
         return SelectQuery(cls, columns=columns, named_columns=named)
 
     @classmethod
+    def exec_(cls, *columns: Any, **named: Any) -> Any:
+        """Start an EXEC query on this model (returns vectors/dicts, not tables)."""
+        from ..query.exec_ import ExecQuery
+        return ExecQuery(cls, columns=columns, named_columns=named)
+
+    @classmethod
     def insert(cls, rows: list[Model]) -> Any:
         """Create an INSERT query for a list of model instances."""
         from ..query.insert import InsertQuery

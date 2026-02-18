@@ -47,13 +47,21 @@ from .registry import EngineRegistry, EngineGroup
 from .rpc import QFunction, q_api
 from .query.expressions import (
     Expr, Column, Literal, BinOp, AggFunc,
+    FbyExpr, EachExpr, _QSentinel,
     avg_, sum_, min_, max_, count_, first_, last_, med_, dev_, var_,
+    xbar_, today_, now_,
+    fby_,
+    each_, peach_,
 )
 from .query.select import SelectQuery
 from .query.update import UpdateQuery
 from .query.delete import DeleteQuery
 from .query.insert import InsertQuery
+from .query.exec_ import ExecQuery
 from .query.joins import aj, lj, ij, wj
+from .pagination import paginate, async_paginate
+from .retry import RetryPolicy
+from .config import load_config, engines_from_config, group_from_config
 from .connection.sync_conn import SyncConnection
 from .connection.async_conn import AsyncConnection
 from .connection.pool import SyncPool, AsyncPool
@@ -86,9 +94,19 @@ __all__ = [
     # Queries
     'Expr', 'Column', 'Literal', 'BinOp', 'AggFunc',
     'SelectQuery', 'UpdateQuery', 'DeleteQuery', 'InsertQuery',
+    'ExecQuery',
     'avg_', 'sum_', 'min_', 'max_', 'count_', 'first_', 'last_',
     'med_', 'dev_', 'var_',
+    'xbar_', 'today_', 'now_',
+    'fby_', 'FbyExpr',
+    'each_', 'peach_', 'EachExpr',
     'aj', 'lj', 'ij', 'wj',
+    # Pagination
+    'paginate', 'async_paginate',
+    # Retry
+    'RetryPolicy',
+    # Config
+    'load_config', 'engines_from_config', 'group_from_config',
     # Connections
     'SyncConnection', 'AsyncConnection', 'SyncPool', 'AsyncPool',
     # Exceptions

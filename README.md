@@ -72,6 +72,15 @@ with Session(engine) as s:
   - [Arithmetic Operators](#arithmetic-operators)
   - [Logical Operators](#logical-operators)
   - [Built-in Methods](#built-in-methods)
+- [Temporal Helpers](#temporal-helpers)
+  - [xbar (time bucketing)](#xbar-time-bucketing)
+  - [today / now](#today--now)
+- [fby (filter by)](#fby-filter-by)
+- [each / peach (adverbs)](#each--peach-adverbs)
+- [Exec Query](#exec-query)
+- [Pagination](#pagination)
+  - [Offset](#offset)
+  - [Paginate Helper](#paginate-helper)
 - [Joins](#joins)
   - [As-of Join (aj)](#as-of-join-aj)
   - [Left Join (lj)](#left-join-lj)
@@ -98,6 +107,8 @@ with Session(engine) as s:
   - [Enabling TLS](#enabling-tls)
   - [TLS DSN Scheme](#tls-dsn-scheme)
   - [Custom SSL Context](#custom-ssl-context)
+- [Retry / Reconnection](#retry--reconnection)
+- [Config Files (YAML/TOML/JSON)](#config-files-yamltoml-json)
 - [Connection Pools](#connection-pools)
   - [Sync Pool](#sync-pool)
   - [Async Pool](#async-pool)
@@ -119,19 +130,16 @@ with Session(engine) as s:
 pip install qorm
 ```
 
-With optional pandas support for DataFrame export:
+With optional extras:
 
 ```bash
-pip install qorm[pandas]
+pip install qorm[pandas]    # DataFrame export
+pip install qorm[toml]      # TOML config files (automatic on Python 3.11+)
+pip install qorm[yaml]      # YAML config files
+pip install qorm[dev]       # pytest for development
 ```
 
-For development (includes pytest):
-
-```bash
-pip install qorm[dev]
-```
-
-**Requirements:** Python 3.10+. No other dependencies — qorm is pure Python.
+**Requirements:** Python 3.10+. No runtime dependencies — qorm is pure Python.
 
 ---
 
@@ -643,11 +651,13 @@ Trade.select(
 ).by(Trade.sym)
 ```
 
-### Limit
+### Limit and Offset
 
 ```python
-Trade.select().limit(10)    # first 10 rows
+Trade.select().limit(10)                  # first 10 rows
 Trade.select().where(Trade.price > 100).limit(5)
+Trade.select().offset(100).limit(50)      # skip 100, take 50
+Trade.select().offset(200)                # skip first 200 rows
 ```
 
 ### Update
@@ -763,6 +773,169 @@ Trade.sym.in_(["AAPL", "GOOG"])  # sym in (`AAPL;`GOOG)
 # asc / desc — sorting
 Trade.price.asc()
 Trade.price.desc()
+```
+
+---
+
+## Temporal Helpers
+
+kdb+ time-series operations used in virtually every aggregation.
+
+### xbar (time bucketing)
+
+`xbar` rounds values down to bucket boundaries — the standard way to bucket timestamps:
+
+```python
+from qorm import xbar_, avg_
+
+# 5-minute bars: bucket time by 5, aggregate price
+Trade.select(Trade.sym, vwap=avg_(Trade.price))
+     .by(Trade.sym, t=xbar_(5, Trade.time))
+```
+
+Compiles to q: `(5 xbar time)` in the by-clause.
+
+`xbar_` works anywhere an expression is accepted — in `.by()`, `.where()`, or `.select()`:
+
+```python
+# In a where clause
+Trade.select().where(xbar_(1, Trade.time) > some_time)
+```
+
+### today / now
+
+Sentinels that compile to q's built-in date/time values:
+
+```python
+from qorm import today_, now_
+
+# Trades from today
+Trade.select().where(Trade.date == today_())
+# Compiles to: ... (date=.z.d) ...
+
+# Trades in the last hour
+Trade.select().where(Trade.time > now_())
+# Compiles to: ... (time>.z.p) ...
+```
+
+| Helper     | Compiles to | Description              |
+|------------|-------------|--------------------------|
+| `today_()` | `.z.d`      | Current date             |
+| `now_()`   | `.z.p`      | Current timestamp (UTC)  |
+
+---
+
+## fby (filter by)
+
+kdb+'s `fby` applies an aggregate per group and returns a vector, used in WHERE clauses to filter rows based on group-level conditions:
+
+```python
+from qorm import fby_
+
+# Select trades where price equals the max price for that symbol
+Trade.select().where(Trade.price == fby_("max", Trade.price, Trade.sym))
+# Compiles to: ... (price=(max;price) fby sym) ...
+
+# Trades with above-average size for their symbol
+Trade.select().where(Trade.size > fby_("avg", Trade.size, Trade.sym))
+```
+
+**Signature:** `fby_(agg_name, col, group_col)`
+
+| Parameter   | Description                                   |
+|-------------|-----------------------------------------------|
+| `agg_name`  | Aggregate function name: `"max"`, `"avg"`, `"min"`, `"sum"`, etc. |
+| `col`       | Column to aggregate                           |
+| `group_col` | Column to group by                            |
+
+---
+
+## each / peach (adverbs)
+
+kdb+ adverbs: `f each x` applies `f` to each element, `f peach x` does so in parallel across threads.
+
+```python
+from qorm import count_, avg_, each_, peach_
+
+# Method form — chain .each() or .peach() on an aggregate
+Trade.select(Trade.sym, tag_count=count_(Trade.tags).each())
+# Compiles to: count tags each
+
+Trade.select(Trade.sym, avg_prices=avg_(Trade.prices).peach())
+# Compiles to: avg prices peach
+
+# Standalone form
+Trade.select(Trade.sym, tag_count=each_("count", Trade.tags))
+Trade.select(Trade.sym, avg_prices=peach_("sum", Trade.prices))
+```
+
+---
+
+## Exec Query
+
+q's `exec` returns vectors or dicts instead of tables. Use it when you want raw column data without the table wrapper.
+
+```python
+# Single column → returns a vector (list)
+prices = s.exec(Trade.exec_(Trade.price))
+
+# Multiple columns → returns a dict
+data = s.exec(Trade.exec_(Trade.sym, Trade.price))
+
+# With filtering
+syms = s.exec(Trade.exec_(Trade.sym).where(Trade.size > 100))
+
+# With named columns and aggregates
+avg_prices = s.exec(Trade.exec_(avg_price=avg_(Trade.price)).by(Trade.sym))
+```
+
+`ExecQuery` supports the same chainable API as `SelectQuery`: `.where()`, `.by()`, `.limit()`, `.compile()`, `.explain()`.
+
+```python
+query = Trade.exec_(Trade.price)
+print(query.explain())
+# -- ExecQuery on `trade
+# ?[trade;();0b;`price]
+```
+
+---
+
+## Pagination
+
+### Offset
+
+Skip the first *n* rows with `.offset()`:
+
+```python
+# Skip first 100 rows, take next 50
+Trade.select().offset(100).limit(50)
+# Compiles to: 50#(100_(?[trade;();0b;()]))
+
+# Offset without limit
+Trade.select().offset(200)
+# Compiles to: 200_(?[trade;();0b;()])
+```
+
+### Paginate Helper
+
+Iterate over large result sets in pages:
+
+```python
+from qorm import paginate
+
+for page in paginate(s, Trade.select().where(Trade.sym == "AAPL"), page_size=1000):
+    df = page.to_dataframe()
+    process(df)
+    # Stops automatically when a page has fewer rows than page_size or is empty
+```
+
+Async version:
+
+```python
+from qorm import async_paginate
+
+async for page in async_paginate(s, Trade.select(), page_size=1000):
+    process(page)
 ```
 
 ---
@@ -1135,6 +1308,116 @@ group = EngineGroup.from_config({
         "rdb": {"host": "fx-rdb", "port": 5020},
     },
 })
+```
+
+---
+
+## Retry / Reconnection
+
+Configure automatic retry with exponential backoff at the Engine level. On retryable errors (e.g. `ConnectionError`), the session reconnects and retries transparently.
+
+```python
+from qorm import Engine, Session, RetryPolicy
+
+policy = RetryPolicy(
+    max_retries=3,        # retry up to 3 times
+    base_delay=0.5,       # initial delay in seconds
+    backoff_factor=2.0,   # double the delay each retry
+    max_delay=30.0,       # cap delay at 30 seconds
+)
+
+engine = Engine(host="kdb-prod", port=5000, retry=policy)
+
+with Session(engine) as s:
+    # Automatically retries on ConnectionError with backoff
+    result = s.exec(Trade.select())
+```
+
+**RetryPolicy parameters:**
+
+| Parameter         | Type    | Default            | Description                                  |
+|-------------------|---------|--------------------|----------------------------------------------|
+| `max_retries`     | `int`   | `3`                | Maximum retry attempts                       |
+| `base_delay`      | `float` | `0.1`              | Initial delay in seconds                     |
+| `max_delay`       | `float` | `30.0`             | Maximum delay cap                            |
+| `backoff_factor`  | `float` | `2.0`              | Multiplier applied each attempt              |
+| `retryable_errors`| `tuple` | `(ConnectionError,)` | Exception types that trigger retries       |
+
+Retry applies to `session.raw()`, `session.exec()`, and `session.call()`. Non-retryable errors (e.g. `QError` for q-level errors) propagate immediately without retry.
+
+---
+
+## Config Files (YAML/TOML/JSON)
+
+Load engine configurations from files instead of hardcoding connection parameters.
+
+```python
+from qorm import engines_from_config, group_from_config
+
+# Single-level config → EngineRegistry
+equities = engines_from_config("config/equities.toml")
+equities = engines_from_config("config/equities.yaml")
+equities = engines_from_config("config/equities.json")
+
+# Two-level config → EngineGroup
+group = group_from_config("config/engines.yaml")
+```
+
+**JSON example** (`equities.json`):
+
+```json
+{
+  "rdb": {"host": "eq-rdb", "port": 5010},
+  "hdb": {"host": "eq-hdb", "port": 5012}
+}
+```
+
+**TOML example** (`equities.toml`):
+
+```toml
+[rdb]
+host = "eq-rdb"
+port = 5010
+
+[hdb]
+host = "eq-hdb"
+port = 5012
+```
+
+**YAML example** (`equities.yaml`, requires `pip install qorm[yaml]`):
+
+```yaml
+rdb:
+  host: eq-rdb
+  port: 5010
+hdb:
+  host: eq-hdb
+  port: 5012
+```
+
+**Two-level config** for EngineGroup (`engines.yaml`):
+
+```yaml
+equities:
+  rdb:
+    host: eq-rdb
+    port: 5010
+  hdb:
+    host: eq-hdb
+    port: 5012
+fx:
+  rdb:
+    host: fx-rdb
+    port: 5020
+```
+
+The `load_config()` function is also available for loading raw dicts:
+
+```python
+from qorm import load_config
+
+config = load_config("config/equities.toml")
+# Returns: {"rdb": {"host": "eq-rdb", "port": 5010}, ...}
 ```
 
 ---
@@ -1565,11 +1848,30 @@ from qorm import (
     Expr, Column, Literal, BinOp, AggFunc,
     avg_, sum_, min_, max_, count_, first_, last_, med_, dev_, var_,
 
+    # Temporal helpers
+    xbar_, today_, now_,
+
+    # fby (filter by)
+    fby_, FbyExpr,
+
+    # each / peach (adverbs)
+    each_, peach_, EachExpr,
+
     # Query builders
     SelectQuery, UpdateQuery, DeleteQuery, InsertQuery,
+    ExecQuery,
+
+    # Pagination
+    paginate, async_paginate,
 
     # Joins
     aj, lj, ij, wj,
+
+    # Retry
+    RetryPolicy,
+
+    # Config
+    load_config, engines_from_config, group_from_config,
 
     # Connections & Pools
     SyncConnection, AsyncConnection, SyncPool, AsyncPool,

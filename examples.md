@@ -12,6 +12,9 @@ Every example assumes a kdb+ process is already running with tables deployed by 
 from qorm import Engine, Session, AsyncSession, avg_, sum_, min_, max_, count_, first_, last_
 from qorm import aj, lj, ij, wj
 from qorm import EngineRegistry, EngineGroup, QFunction, q_api, Subscriber
+from qorm import xbar_, today_, now_, fby_, each_, peach_
+from qorm import ExecQuery, paginate, async_paginate, RetryPolicy
+from qorm import engines_from_config, group_from_config, load_config
 ```
 
 ---
@@ -838,4 +841,370 @@ with equities.pool("rdb", min_size=2, max_size=5) as pool:
         result = conn.query("select from trade where i<5")
     finally:
         pool.release(conn)
+```
+
+---
+
+## 32. Time bucketing with xbar
+
+Bucket timestamps into intervals for time-series aggregation — the most common kdb+ pattern.
+
+```python
+from qorm import xbar_, avg_, sum_, count_
+
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+
+    # 5-minute VWAP bars
+    result = s.exec(
+        Trade.select(
+            Trade.sym,
+            vwap=avg_(Trade.price),
+            volume=sum_(Trade.size),
+            trade_count=count_(),
+        )
+        .by(Trade.sym, bucket=xbar_(5, Trade.time))
+    )
+    for row in result:
+        print(f"{row.sym} @ {row.bucket}: vwap={row.vwap:.2f}, "
+              f"vol={row.volume}, trades={row.trade_count}")
+
+    # 1-minute bars for a single symbol
+    result = s.exec(
+        Trade.select(
+            high=max_(Trade.price),
+            low=min_(Trade.price),
+            close=last_(Trade.price),
+        )
+        .where(Trade.sym == "AAPL")
+        .by(t=xbar_(1, Trade.time))
+    )
+```
+
+---
+
+## 33. Today and now helpers
+
+Filter by the current date or timestamp without hardcoding values.
+
+```python
+from qorm import today_, now_
+
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+
+    # All trades from today
+    result = s.exec(
+        Trade.select().where(Trade.date == today_())
+    )
+
+    # Trades in the last timestamp range
+    result = s.exec(
+        Trade.select().where(Trade.time > now_())
+    )
+
+    # Combine xbar with today
+    result = s.exec(
+        Trade.select(Trade.sym, avg_price=avg_(Trade.price))
+             .where(Trade.date == today_())
+             .by(Trade.sym, t=xbar_(5, Trade.time))
+    )
+```
+
+---
+
+## 34. fby (filter by) — group-level WHERE conditions
+
+Filter rows based on an aggregate computed per group, without a separate groupby query.
+
+```python
+from qorm import fby_
+
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+
+    # Trades where price equals the max price for that symbol
+    # q: select from trade where price = (max;price) fby sym
+    result = s.exec(
+        Trade.select().where(
+            Trade.price == fby_("max", Trade.price, Trade.sym)
+        )
+    )
+    print(f"Found {len(result)} trades at their symbol's high")
+
+    # Trades with above-average size for their symbol
+    result = s.exec(
+        Trade.select().where(
+            Trade.size > fby_("avg", Trade.size, Trade.sym)
+        )
+    )
+
+    # Combine fby with other WHERE conditions
+    result = s.exec(
+        Trade.select()
+             .where(Trade.sym.in_(["AAPL", "GOOG"]))
+             .where(Trade.price == fby_("min", Trade.price, Trade.sym))
+    )
+```
+
+---
+
+## 35. each / peach adverbs
+
+Apply a function element-wise (`each`) or in parallel (`peach`) — useful for nested/list columns.
+
+```python
+from qorm import count_, avg_, each_, peach_
+
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+
+    # Count tags per row (tags is a list column)
+    # q: select sym, tag_count:count each tags from trade
+    result = s.exec(
+        Trade.select(Trade.sym, tag_count=count_(Trade.tags).each())
+    )
+
+    # Standalone form
+    result = s.exec(
+        Trade.select(Trade.sym, lengths=each_("count", Trade.tags))
+    )
+
+    # Parallel execution with peach
+    result = s.exec(
+        Trade.select(Trade.sym, avg_prices=avg_(Trade.prices).peach())
+    )
+```
+
+---
+
+## 36. Exec query — get vectors instead of tables
+
+Use `exec_` when you want raw column values (vectors or dicts) instead of a table result set.
+
+```python
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+
+    # Single column → returns a list (vector)
+    all_prices = s.exec(Trade.exec_(Trade.price))
+    print(f"Got {len(all_prices)} prices")
+    print(f"Average: {sum(all_prices) / len(all_prices):.2f}")
+
+    # Multiple columns → returns a dict of vectors
+    data = s.exec(Trade.exec_(Trade.sym, Trade.price))
+    print(data.keys())  # dict_keys(['sym', 'price'])
+
+    # With filtering
+    aapl_prices = s.exec(
+        Trade.exec_(Trade.price).where(Trade.sym == "AAPL")
+    )
+
+    # Named columns with aggregates
+    result = s.exec(
+        Trade.exec_(avg_price=avg_(Trade.price)).by(Trade.sym)
+    )
+
+    # Inspect the compiled q
+    print(Trade.exec_(Trade.price).explain())
+    # -- ExecQuery on `trade
+    # ?[trade;();0b;`price]
+```
+
+---
+
+## 37. Pagination — iterate over large result sets
+
+Process data in manageable pages instead of loading everything into memory.
+
+```python
+from qorm import paginate
+
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+
+    # Page through all AAPL trades, 1000 rows at a time
+    query = Trade.select().where(Trade.sym == "AAPL")
+
+    total_rows = 0
+    for page in paginate(s, query, page_size=1000):
+        df = page.to_dataframe()
+        total_rows += len(page)
+        print(f"Processing page: {len(page)} rows (total so far: {total_rows})")
+        # process(df)
+
+    # Manual offset/limit for one-off paging
+    page_3 = s.exec(
+        Trade.select().offset(200).limit(100)
+    )
+```
+
+Async version:
+
+```python
+from qorm import async_paginate, AsyncSession
+
+async with AsyncSession(engine) as s:
+    Trade = await s.reflect("trade")
+
+    async for page in async_paginate(s, Trade.select(), page_size=1000):
+        print(f"Got {len(page)} rows")
+```
+
+---
+
+## 38. Retry / reconnection policy
+
+Automatically retry on connection failures with exponential backoff.
+
+```python
+from qorm import Engine, Session, RetryPolicy
+
+# Configure a retry policy
+policy = RetryPolicy(
+    max_retries=3,       # retry up to 3 times
+    base_delay=0.5,      # start with 0.5 second delay
+    backoff_factor=2.0,  # double delay each retry: 0.5s, 1.0s, 2.0s
+    max_delay=30.0,      # never wait more than 30 seconds
+)
+
+# Attach the policy to an engine
+engine = Engine(host="kdb-prod", port=5000, retry=policy)
+
+# Session automatically retries raw(), exec(), and call() on ConnectionError
+with Session(engine) as s:
+    # If the connection drops, qorm will:
+    # 1. Close the stale connection
+    # 2. Open a fresh connection
+    # 3. Wait (with backoff)
+    # 4. Retry the query
+    result = s.exec(Trade.select())
+
+# Works with registries too
+equities = EngineRegistry.from_config({
+    "rdb": {"host": "eq-rdb", "port": 5010, "retry": None},  # no retry
+})
+
+# Or build the engine manually with retry
+from qorm import Engine
+engine_with_retry = Engine(host="eq-rdb", port=5010, retry=policy)
+```
+
+---
+
+## 39. Config files (YAML / TOML / JSON)
+
+Load engine configurations from files instead of hardcoding.
+
+```python
+from qorm import engines_from_config, group_from_config, load_config
+
+# --- JSON (always available, no extra deps) ---
+equities = engines_from_config("config/equities.json")
+# equities.json:
+# {
+#   "rdb": {"host": "eq-rdb", "port": 5010},
+#   "hdb": {"host": "eq-hdb", "port": 5012}
+# }
+
+with equities.session("rdb") as s:
+    Trade = s.reflect("trade")
+    result = s.exec(Trade.select().limit(10))
+
+# --- TOML (built-in on Python 3.11+, or pip install qorm[toml]) ---
+equities = engines_from_config("config/equities.toml")
+# equities.toml:
+# [rdb]
+# host = "eq-rdb"
+# port = 5010
+#
+# [hdb]
+# host = "eq-hdb"
+# port = 5012
+
+# --- YAML (pip install qorm[yaml]) ---
+equities = engines_from_config("config/equities.yaml")
+# equities.yaml:
+# rdb:
+#   host: eq-rdb
+#   port: 5010
+# hdb:
+#   host: eq-hdb
+#   port: 5012
+
+# --- Two-level config for EngineGroup ---
+group = group_from_config("config/engines.yaml")
+# engines.yaml:
+# equities:
+#   rdb:
+#     host: eq-rdb
+#     port: 5010
+# fx:
+#   rdb:
+#     host: fx-rdb
+#     port: 5020
+
+with group.session("equities", "rdb") as s:
+    result = s.exec(Trade.select().limit(10))
+
+with group.session("fx") as s:
+    tables = s.tables()
+
+# --- Low-level: load raw dict ---
+config = load_config("config/equities.toml")
+print(config)  # {"rdb": {"host": "eq-rdb", "port": 5010}, ...}
+```
+
+---
+
+## 40. Full workflow with new features
+
+Combining temporal helpers, fby, exec, pagination, retry, and config files.
+
+```python
+from qorm import (
+    Engine, Session, RetryPolicy,
+    engines_from_config, paginate,
+    avg_, sum_, max_, min_, count_, first_, last_,
+    xbar_, today_, fby_,
+)
+
+# Load config with retry
+policy = RetryPolicy(max_retries=3, base_delay=0.5)
+equities = engines_from_config("config/equities.json")
+
+with equities.session("rdb") as s:
+    Trade = s.reflect("trade")
+
+    # --- Today's 5-minute VWAP bars ---
+    bars = s.exec(
+        Trade.select(
+            Trade.sym,
+            vwap=avg_(Trade.price),
+            volume=sum_(Trade.size),
+        )
+        .where(Trade.date == today_())
+        .by(Trade.sym, bucket=xbar_(5, Trade.time))
+    )
+    df_bars = bars.to_dataframe()
+    print(df_bars.head())
+
+    # --- Find trades at the day's high per symbol ---
+    highs = s.exec(
+        Trade.select()
+             .where(Trade.date == today_())
+             .where(Trade.price == fby_("max", Trade.price, Trade.sym))
+    )
+    print(f"Found {len(highs)} trades at daily highs")
+
+    # --- Get all unique symbols (exec, not select) ---
+    all_syms = s.exec(Trade.exec_(Trade.sym).where(Trade.date == today_()))
+    unique_syms = list(set(all_syms))
+    print(f"Active symbols today: {len(unique_syms)}")
+
+    # --- Page through historical data ---
+    for page in paginate(s, Trade.select().where(Trade.sym == "AAPL"), page_size=5000):
+        df = page.to_dataframe()
+        # process(df)
+        print(f"  Processed {len(page)} rows")
 ```

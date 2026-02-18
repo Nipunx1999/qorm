@@ -25,6 +25,8 @@ dependencies = []
 
 [project.optional-dependencies]
 pandas = ["pandas>=1.5"]
+toml = ["tomli>=2.0; python_version<'3.11'"]
+yaml = ["pyyaml>=6.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
 
 [tool.hatch.build.targets.wheel]

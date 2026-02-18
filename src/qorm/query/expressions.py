@@ -150,8 +150,52 @@ class AggFunc(Expr):
         self.func_name = func_name
         self.column = column
 
+    def each(self) -> EachExpr:
+        """Apply this aggregate with the ``each`` adverb."""
+        return EachExpr(self, 'each')
+
+    def peach(self) -> EachExpr:
+        """Apply this aggregate with the ``peach`` adverb."""
+        return EachExpr(self, 'peach')
+
     def __repr__(self) -> str:
         return f"AggFunc({self.func_name}({self.column!r}))"
+
+
+class FbyExpr(Expr):
+    """Filter-by expression: ``(agg;col) fby group_col``."""
+    __slots__ = ('agg_name', 'col', 'group_col')
+
+    def __init__(self, agg_name: str, col: Expr, group_col: Expr) -> None:
+        self.agg_name = agg_name
+        self.col = col
+        self.group_col = group_col
+
+    def __repr__(self) -> str:
+        return f"FbyExpr({self.agg_name}, {self.col!r}, {self.group_col!r})"
+
+
+class EachExpr(Expr):
+    """Adverb expression: ``func each col`` or ``func peach col``."""
+    __slots__ = ('func_expr', 'adverb')
+
+    def __init__(self, func_expr: Expr, adverb: str) -> None:
+        self.func_expr = func_expr
+        self.adverb = adverb
+
+    def __repr__(self) -> str:
+        return f"EachExpr({self.func_expr!r}, {self.adverb!r})"
+
+
+class _QSentinel:
+    """Sentinel for q built-in values that compile to exact q strings."""
+    __slots__ = ('q_repr',)
+
+    def __init__(self, q_repr: str) -> None:
+        self.q_repr = q_repr
+
+    def __repr__(self) -> str:
+        return f"_QSentinel({self.q_repr!r})"
 
 
 # ── Helper functions ───────────────────────────────────────────────
@@ -215,3 +259,39 @@ def _wrap_col(col: Expr | str) -> Expr:
     if isinstance(col, str):
         return Column(col)
     return col
+
+
+# ── Temporal helpers ──────────────────────────────────────────────
+
+def xbar_(bucket: int, col: Expr | str) -> FuncCall:
+    """``bucket xbar col`` — bucket timestamps/values."""
+    return FuncCall('xbar', [Literal(bucket), _wrap_col(col)])
+
+
+def today_() -> Literal:
+    """Compile to ``.z.d`` (current date)."""
+    return Literal(_QSentinel('.z.d'))
+
+
+def now_() -> Literal:
+    """Compile to ``.z.p`` (current timestamp)."""
+    return Literal(_QSentinel('.z.p'))
+
+
+# ── fby (filter by) ──────────────────────────────────────────────
+
+def fby_(agg_name: str, col: Expr | str, group_col: Expr | str) -> FbyExpr:
+    """``(agg;col) fby group_col``."""
+    return FbyExpr(agg_name, _wrap_col(col), _wrap_col(group_col))
+
+
+# ── each / peach ─────────────────────────────────────────────────
+
+def each_(func_name: str, col: Expr | str) -> EachExpr:
+    """``func_name each col``."""
+    return EachExpr(AggFunc(func_name, _wrap_col(col)), 'each')
+
+
+def peach_(func_name: str, col: Expr | str) -> EachExpr:
+    """``func_name peach col``."""
+    return EachExpr(AggFunc(func_name, _wrap_col(col)), 'peach')

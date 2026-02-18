@@ -32,6 +32,7 @@ class Engine:
         tls: bool = False,
         tls_context: ssl.SSLContext | None = None,
         tls_verify: bool = True,
+        retry: Any = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -41,6 +42,7 @@ class Engine:
         self.tls = tls
         self.tls_context = tls_context
         self.tls_verify = tls_verify
+        self.retry = retry
 
     def _get_ssl_context(self) -> ssl.SSLContext | None:
         """Build or return the SSL context for TLS connections."""
