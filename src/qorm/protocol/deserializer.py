@@ -100,9 +100,9 @@ class Deserializer:
             return self._deserialize_dict()
         elif type_byte == QTypeCode.SORTED_DICT:
             return self._deserialize_dict()  # sorted dict same structure
-        elif 100 <= type_byte <= 111:
-            # Lambda/operator types - read as string
-            return self._deserialize_lambda(type_byte)
+        elif 100 <= type_byte <= 117:
+            # Lambda/operator/adverb/iterator types
+            return self._deserialize_function(type_byte)
         else:
             raise DeserializationError(f"Unknown type byte: {type_byte}")
 
@@ -251,14 +251,32 @@ class Deserializer:
         msg = self._read_symbol()
         raise QError(msg)
 
-    # ── Lambda (stub) ──────────────────────────────────────────────
+    # ── Functions / Operators ─────────────────────────────────────
 
-    def _deserialize_lambda(self, type_byte: int) -> str:
-        """Stub for lambda/operator types."""
+    def _deserialize_function(self, type_byte: int) -> Any:
+        """Deserialize kdb+ function/operator types (100-117).
+
+        Wire formats:
+        - 100 (lambda): null-terminated namespace + serialized body
+        - 101-103 (unary/binary/ternary prim): 1 byte (operator index)
+        - 104 (projection): 4-byte count + N serialized objects
+        - 105 (composition): 4-byte count + N serialized objects
+        - 106-117 (adverbs/iterators): 1 serialized object
+        """
         if type_byte == 100:
-            # Lambda: namespace + body
+            # Lambda: namespace string + body
             ns = self._read_symbol()
             body = self._deserialize()
             return f"{{lambda: {body}}}"
-        # Other function types - skip
-        return f"<function type {type_byte}>"
+        if type_byte <= 103:
+            # Unary/binary/ternary primitive: single byte index
+            self._read_byte()
+            return f"<primitive type {type_byte}>"
+        if type_byte <= 105:
+            # Projection (104) / Composition (105): count + N objects
+            count = self._unpack('i')
+            items = [self._deserialize() for _ in range(count)]
+            return items
+        # 106-117: adverb / iterator — wraps one serialized object
+        inner = self._deserialize()
+        return inner

@@ -242,3 +242,65 @@ class TestKnownByteSequences:
         _, result = self.des.deserialize_message(msg)
         assert isinstance(result, QNull)
         assert result.type_code == QTypeCode.LONG
+
+
+class TestFunctionTypes:
+    """Test deserialization of kdb+ function/operator types (100-117)."""
+
+    def setup_method(self):
+        self.des = Deserializer()
+
+    def _msg(self, payload: bytes) -> bytes:
+        header = struct.pack('<BBHi', 1, 2, 0, 8 + len(payload))
+        return header + payload
+
+    def test_unary_primitive_101(self):
+        # Type 101 + 1 byte operator index
+        payload = bytes([101, 0])
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert "primitive" in result.lower()
+
+    def test_binary_primitive_102(self):
+        payload = bytes([102, 1])
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert "primitive" in result.lower()
+
+    def test_projection_104(self):
+        # Type 104 + count(2) + two long atoms
+        inner1 = bytes([256 - 7]) + struct.pack('<q', 10)
+        inner2 = bytes([256 - 7]) + struct.pack('<q', 20)
+        payload = bytes([104]) + struct.pack('<i', 2) + inner1 + inner2
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert isinstance(result, list)
+        assert result == [10, 20]
+
+    def test_adverb_type_106_each(self):
+        # Type 106 (each) wraps a long atom
+        inner = bytes([256 - 7]) + struct.pack('<q', 42)
+        payload = bytes([106]) + inner
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert result == 42
+
+    def test_adverb_type_116(self):
+        # Type 116 (iterator-applied) wraps a serialized object
+        inner = bytes([256 - 7]) + struct.pack('<q', 99)
+        payload = bytes([116]) + inner
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert result == 99
+
+    def test_adverb_type_117(self):
+        # Type 117 wraps a serialized object
+        inner_str = b"hello\x00"
+        inner = bytes([256 - 11]) + inner_str
+        payload = bytes([117]) + inner
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert result == "hello"
+
+    def test_function_in_mixed_list(self):
+        # Mixed list containing a type-116 function wrapping a long
+        inner_func = bytes([116]) + bytes([256 - 7]) + struct.pack('<q', 5)
+        inner_long = bytes([256 - 7]) + struct.pack('<q', 10)
+        payload = bytes([0, 0]) + struct.pack('<i', 2) + inner_func + inner_long
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert isinstance(result, list)
+        assert result == [5, 10]
