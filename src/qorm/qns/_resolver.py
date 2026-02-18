@@ -22,16 +22,31 @@ DEFAULT_CACHE_TTL = 7 * 24 * 3600  # 7 days in seconds
 def _parse_service_rows(raw: Any) -> list[dict]:
     """Parse the raw kdb+ response into a list of service dicts.
 
-    Expects a column-oriented dict (table) with keys including:
-    dataset, cluster, dbtype, node, host, port, ssl, ip, env.
+    Handles three kdb+ response shapes:
+    - Column-oriented dict (table): ``{'col': [...], ...}``
+    - Keyed table: ``{'keys': {table}, 'values': {table}}``
+    - Row-oriented list: ``[{'col': val, ...}, ...]``
 
     Raises
     ------
     QNSRegistryError
         If the response format is unexpected.
     """
+    if isinstance(raw, list):
+        if not raw:
+            return []
+        if isinstance(raw[0], dict):
+            return [{k: v for k, v in row.items() if k != "__table__"} for row in raw]
+        raise QNSRegistryError(f"Unexpected QNS list element type: {type(raw[0]).__name__}")
+
     if isinstance(raw, dict):
-        data = {k: v for k, v in raw.items() if k != "__table__"}
+        # Keyed table: merge key columns and value columns
+        if "keys" in raw and "values" in raw and isinstance(raw["keys"], dict) and isinstance(raw["values"], dict):
+            keys_t = {k: v for k, v in raw["keys"].items() if k != "__table__"}
+            vals_t = {k: v for k, v in raw["values"].items() if k != "__table__"}
+            data = {**keys_t, **vals_t}
+        else:
+            data = {k: v for k, v in raw.items() if k != "__table__"}
         if not data:
             return []
         cols = list(data.keys())

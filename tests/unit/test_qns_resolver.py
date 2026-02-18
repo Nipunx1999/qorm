@@ -46,6 +46,42 @@ class TestParseServiceRows:
         rows = _parse_service_rows(raw)
         assert rows == []
 
+    def test_list_of_dicts_response(self) -> None:
+        raw = [
+            {"dataset": "EMR", "cluster": "SVC", "dbtype": "HDB", "host": "h1", "port": 5010},
+            {"dataset": "FXR", "cluster": "SVC", "dbtype": "RDB", "host": "h2", "port": 5011},
+        ]
+        rows = _parse_service_rows(raw)
+        assert len(rows) == 2
+        assert rows[0]["dataset"] == "EMR"
+        assert rows[1]["port"] == 5011
+
+    def test_list_of_dicts_strips_table_marker(self) -> None:
+        raw = [{"__table__": True, "dataset": "X", "host": "h1"}]
+        rows = _parse_service_rows(raw)
+        assert len(rows) == 1
+        assert "__table__" not in rows[0]
+        assert rows[0]["dataset"] == "X"
+
+    def test_empty_list(self) -> None:
+        assert _parse_service_rows([]) == []
+
+    def test_keyed_table_response(self) -> None:
+        raw = {
+            "keys": {"__table__": True, "node": ["1", "2"]},
+            "values": {
+                "__table__": True,
+                "dataset": ["EMR", "FXR"],
+                "host": ["h1", "h2"],
+                "port": [5010, 5011],
+            },
+        }
+        rows = _parse_service_rows(raw)
+        assert len(rows) == 2
+        assert rows[0]["node"] == "1"
+        assert rows[0]["dataset"] == "EMR"
+        assert rows[1]["port"] == 5011
+
     def test_unexpected_type_raises(self) -> None:
         with pytest.raises(QNSRegistryError, match="Unexpected"):
             _parse_service_rows("not a dict")
