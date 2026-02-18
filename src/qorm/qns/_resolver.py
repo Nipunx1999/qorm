@@ -10,7 +10,7 @@ from typing import Any
 
 from ..engine import Engine
 from ..exc import QNSRegistryError
-from ..session import Session
+from ..session import Session, ModelResultSet
 from ._registry import RegistryNode
 
 log = logging.getLogger("qorm.qns")
@@ -32,6 +32,9 @@ def _parse_service_rows(raw: Any) -> list[dict]:
     QNSRegistryError
         If the response format is unexpected.
     """
+    if isinstance(raw, ModelResultSet):
+        raw = raw._data
+
     if isinstance(raw, list):
         if not raw:
             return []
