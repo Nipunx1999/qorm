@@ -103,7 +103,7 @@ class AsyncConnection(AsyncBaseConnection):
         else:
             payload = b''
         if header_bytes[2]:
-            full_msg = decompress(payload)
+            full_msg = decompress(payload, header_bytes)
         else:
             full_msg = header_bytes + payload
         _, result = self._deserializer.deserialize_message(full_msg)
