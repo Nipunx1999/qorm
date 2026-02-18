@@ -143,7 +143,18 @@ def decompress(data: bytes, header_bytes: bytes = b'') -> bytes:
     dst = bytearray(uncompressed_len)
     aa = [0] * 256  # hash table: XOR hash → position in output
 
-    s = 8  # output position (positions 0-7 are the header, filled later)
+    # Pre-fill the original IPC header in positions 0-7 BEFORE
+    # decompressing.  The kdb+ compressor can emit back-references
+    # that point into the header (aa[h] defaults to 0), so these
+    # bytes must be correct before the decompression loop runs.
+    if len(header_bytes) >= 8:
+        dst[0] = header_bytes[0]        # endian
+        dst[1] = header_bytes[1]        # msg_type
+        dst[2] = 0                      # not compressed
+        dst[3] = 0                      # reserved
+        struct.pack_into('<i', dst, 4, uncompressed_len)
+
+    s = 8  # output position (positions 0-7 are the header)
     p = 8  # input position (skip compression sub-header)
     i = 0  # bit multiplier (0 means need fresh control byte)
     f = 0  # control byte
@@ -187,13 +198,5 @@ def decompress(data: bytes, header_bytes: bytes = b'') -> bytes:
         i *= 2
         if i == 256:
             i = 0
-
-    # Reconstruct the original IPC header in positions 0-7
-    if len(header_bytes) >= 8:
-        dst[0] = header_bytes[0]        # endian
-        dst[1] = header_bytes[1]        # msg_type
-        dst[2] = 0                      # not compressed
-        dst[3] = 0                      # reserved
-        struct.pack_into('<i', dst, 4, uncompressed_len)
 
     return bytes(dst)

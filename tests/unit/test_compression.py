@@ -106,6 +106,26 @@ class TestCompressDecompressRoundTrip:
             decompressed = decompress(compressed, header)
             assert decompressed == original
 
+    def test_back_reference_into_header(self):
+        """kdb+ compressor can back-reference position 0 (the header).
+
+        When aa[h] defaults to 0 and the header bytes match payload bytes,
+        the compressor encodes a back-reference into the header region.
+        The decompressor must have the header pre-filled before the loop.
+        """
+        # Build a body whose first bytes match the IPC header bytes.
+        # The header starts with LITTLE_ENDIAN (0x01), RESPONSE_MSG (0x02),
+        # then 0x00, 0x00.  Make the body start with the same pattern so
+        # that a real kdb+ compressor would back-reference position 0.
+        header_echo = struct.pack('<BBH', LITTLE_ENDIAN, RESPONSE_MSG, 0)
+        body = header_echo * 200  # 800 bytes, repeating the header prefix
+        header, original = _make_ipc_message(body)
+
+        compressed = compress(original, level=1)
+        if compressed != original:
+            decompressed = decompress(compressed, header)
+            assert decompressed == original
+
     def test_header_reconstruction(self):
         """Decompressed output should have the correct IPC header."""
         body = b"XYZXYZ" * 100
