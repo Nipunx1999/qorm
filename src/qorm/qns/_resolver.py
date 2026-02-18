@@ -83,14 +83,19 @@ def _fetch_from_registry(
     username: str,
     password: str,
     timeout: float,
+    market: str = "",
 ) -> list[dict]:
-    """Query ``.qns.registry`` with failover across registry nodes.
+    """Query QNS registry with failover across registry nodes.
+
+    For FX markets, uses ``.qns.getRegistry[]``; all others use
+    ``.qns.registry`` (direct table access).
 
     Raises
     ------
     QNSRegistryError
         If all registry nodes are unreachable.
     """
+    query = ".qns.getRegistry[]" if market.lower() == "fx" else ".qns.registry"
     errors: list[str] = []
 
     for node in registry_nodes:
@@ -103,7 +108,7 @@ def _fetch_from_registry(
         )
         try:
             with Session(engine) as sess:
-                raw = sess.raw(".qns.registry")
+                raw = sess.raw(query)
             return _parse_service_rows(raw)
         except Exception as exc:
             msg = f"{node.host}:{node.port} — {exc}"
@@ -135,7 +140,7 @@ def resolve_services(
     if cached is not None:
         return cached
 
-    rows = _fetch_from_registry(registry_nodes, username, password, timeout)
+    rows = _fetch_from_registry(registry_nodes, username, password, timeout, market)
     _save_cache(market, env, rows)
     return rows
 

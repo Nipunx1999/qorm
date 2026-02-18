@@ -1214,7 +1214,9 @@ with equities.session("rdb") as s:
 
 ## 41. Service discovery with QNS — one-liner
 
-Connect to a named kdb+ service without knowing its host:port. The QNS client reads registry nodes from a CSV, queries the QNS registry, and resolves the endpoint.
+Connect to a named kdb+ service without knowing its host:port. The QNS client reads registry nodes from a CSV, queries the registry, and resolves the endpoint.
+
+> The registry query depends on the market: FX uses `.qns.getRegistry[]` (function call), all other markets use `.qns.registry` (direct table access). FX registry responses are often large and arrive IPC-compressed — qorm decompresses transparently.
 
 ```python
 from qorm import Engine, Session
@@ -1374,4 +1376,47 @@ try:
 except QNSServiceNotFoundError as e:
     print(f"Not found: {e}")
     # Not found: Service not found: 'NONEXISTENT.SERVICE.HDB.1'
+```
+
+---
+
+## 47. IPC compression — transparent handling
+
+kdb+ automatically compresses large IPC responses. qorm detects and decompresses them transparently across all connection types — you don't need to do anything.
+
+```python
+from qorm import Engine, Session, Subscriber
+
+# Sync — compressed responses are decompressed automatically
+engine = Engine(host="kdb-prod", port=5010, username="user", password="pass")
+
+with Session(engine) as s:
+    # Large result sets may arrive compressed — handled transparently
+    result = s.raw("select from trade")
+    print(f"Got {len(result)} rows")  # works regardless of compression
+
+# Async — same transparent decompression
+from qorm import AsyncSession
+
+async with AsyncSession(engine) as s:
+    result = await s.raw("select from trade")
+
+# Pub-sub — compressed updates are decompressed in the listener
+async def on_update(table_name, data):
+    print(f"Got {len(data)} rows for {table_name}")
+
+sub = Subscriber(engine, callback=on_update)
+# sub.listen() handles compressed messages automatically
+```
+
+If you need to work with the compression layer directly (e.g. for testing):
+
+```python
+from qorm.protocol.compress import compress, decompress
+
+# Round-trip: compress then decompress
+original_msg = b"\x01\x02\x00\x00..." # an IPC message (header + body)
+compressed = compress(original_msg, level=1)
+restored = decompress(compressed)
+assert restored == original_msg
 ```

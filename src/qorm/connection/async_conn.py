@@ -12,6 +12,7 @@ from ..protocol.constants import SYNC_MSG, HEADER_SIZE
 from ..protocol.framing import unpack_header
 from ..protocol.serializer import Serializer
 from ..protocol.deserializer import Deserializer
+from ..protocol.compress import decompress
 from .base import AsyncBaseConnection
 from .handshake import build_handshake, parse_handshake_response
 
@@ -101,7 +102,10 @@ class AsyncConnection(AsyncBaseConnection):
             payload = await self._reader.readexactly(remaining)
         else:
             payload = b''
-        full_msg = header_bytes + payload
+        if header_bytes[2]:
+            full_msg = decompress(payload)
+        else:
+            full_msg = header_bytes + payload
         _, result = self._deserializer.deserialize_message(full_msg)
         return result
 

@@ -121,6 +121,7 @@ with Session(engine) as s:
   - [Health Checks](#health-checks)
   - [Pool from Registry](#pool-from-registry)
 - [Subscription / Pub-Sub](#subscription--pub-sub)
+- [IPC Compression](#ipc-compression)
 - [Debug / Explain Mode](#debug--explain-mode)
 - [Logging](#logging)
 - [Schema Management](#schema-management)
@@ -1240,7 +1241,12 @@ async with AsyncSession(engine) as s:
 
 ## Service Discovery (QNS)
 
-kdb+ environments commonly use a Q Name Service (QNS) for service discovery. Registry nodes are listed in CSV files keyed by market and environment (e.g. `fx_prod.csv`). qorm's `QNS` client connects to a registry node, queries `.qns.svcs` with prefix filters, and resolves actual service endpoints — so you never need to hardcode host:port values.
+kdb+ environments commonly use a Q Name Service (QNS) for service discovery. Registry nodes are listed in CSV files keyed by market and environment (e.g. `fx_prod.csv`). qorm's `QNS` client connects to a registry node, queries the registry, and resolves actual service endpoints — so you never need to hardcode host:port values.
+
+The registry query varies by market:
+
+- **FX** (`market="fx"`) — uses `.qns.getRegistry[]` (function call that returns the full registry)
+- **All other markets** — uses `.qns.registry` (direct table access)
 
 Services follow the naming convention `DATASET.CLUSTER.DBTYPE.NODE` (e.g. `EMRATESCV.SERVICE.HDB.1`).
 
@@ -1342,6 +1348,8 @@ EMRATESCV,SERVICE,HDB,2,host2.example.com,5011,QNS_PORT,prod
 Required columns: `dataset`, `cluster`, `dbtype`, `node`, `host`, `port`, `port_env`, `env`.
 
 The QNS client tries each registry node in order. If a node is unreachable, it logs a warning and fails over to the next one. If all nodes fail, a `QNSRegistryError` is raised with details for each failure.
+
+> **Note:** FX registry responses are typically large and arrive compressed over IPC. qorm handles this transparently (see [IPC Compression](#ipc-compression)).
 
 ---
 
@@ -1718,6 +1726,32 @@ async with Subscriber(engine, callback=on_trade) as sub:
 | `await close()`                | Stop listening and close the connection    |
 
 The callback receives `(table_name: str, data: Any)` and can be either sync or async.
+
+---
+
+## IPC Compression
+
+kdb+ automatically compresses large IPC responses using a custom LZ-style algorithm. qorm detects the compression flag in the IPC header (byte 2) and decompresses transparently — no configuration needed.
+
+This applies to all receive paths:
+
+- `SyncConnection.receive()`
+- `AsyncConnection.receive()`
+- `Subscriber.listen()`
+
+Compressed responses are common when querying large tables or calling functions like `.qns.getRegistry[]` that return substantial payloads. You don't need to do anything special — qorm handles it automatically.
+
+If you need to work with compression directly (e.g. for testing or custom protocols):
+
+```python
+from qorm.protocol.compress import compress, decompress
+
+# Compress an IPC message (header + body)
+compressed = compress(raw_message, level=1)
+
+# Decompress back to the original
+original = decompress(compressed)
+```
 
 ---
 

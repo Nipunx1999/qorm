@@ -23,6 +23,7 @@ from typing import Any, Callable, Awaitable
 from .connection.async_conn import AsyncConnection
 from .exc import ConnectionError as QConnError
 from .protocol.constants import ASYNC_MSG, HEADER_SIZE
+from .protocol.compress import decompress
 from .protocol.framing import unpack_header
 
 log = logging.getLogger("qorm.subscription")
@@ -108,7 +109,10 @@ class Subscriber:
             else:
                 payload = b''
 
-            full_msg = header_bytes + payload
+            if header_bytes[2]:
+                full_msg = decompress(payload)
+            else:
+                full_msg = header_bytes + payload
             _, result = self._conn._deserializer.deserialize_message(full_msg)
 
             # kdb+ pub-sub sends async messages (type 0) as

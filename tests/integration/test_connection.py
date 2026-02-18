@@ -66,3 +66,13 @@ class TestSyncConnection:
         with SyncConnection(host="127.0.0.1", port=mock_server.port) as conn:
             result = conn.query("test")
             assert result == [1, 2, 3]
+
+    def test_compressed_response(self, mock_server):
+        """SyncConnection.receive() decompresses a compressed IPC response."""
+        # Use a large repetitive string to ensure compression is beneficial
+        big_string = "hello " * 200
+        mock_server.set_default_response(big_string)
+        mock_server.compress_responses = True
+        with SyncConnection(host="127.0.0.1", port=mock_server.port) as conn:
+            result = conn.query("test")
+            assert result == big_string

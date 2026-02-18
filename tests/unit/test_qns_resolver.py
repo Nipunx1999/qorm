@@ -151,12 +151,36 @@ class TestFetchFromRegistry:
         mock_session_cls.return_value.__exit__ = MagicMock(return_value=False)
 
         nodes = [_make_node("h1", 5001), _make_node("h2", 5002)]
-        result = _fetch_from_registry(nodes, "user", "pass", 10.0)
+        result = _fetch_from_registry(nodes, "user", "pass", 10.0, market="eq")
         assert len(result) == 1
         assert result[0]["dataset"] == "EMR"
         assert mock_session_cls.call_count == 1
-        # Verify it queries .qns.registry
+        # Non-FX markets use .qns.registry
         ctx.raw.assert_called_once_with(".qns.registry")
+
+    @patch("qorm.qns._resolver.Session")
+    def test_fx_market_uses_get_registry(self, mock_session_cls: MagicMock) -> None:
+        ctx = MagicMock()
+        ctx.raw.return_value = {
+            "dataset": ["FXR"],
+            "cluster": ["SVC"],
+            "dbtype": ["RDB"],
+            "node": ["1"],
+            "host": ["h1"],
+            "port": [5010],
+            "ssl": ["none"],
+            "ip": ["1.1.1.1"],
+            "env": ["prod"],
+        }
+        mock_session_cls.return_value.__enter__ = MagicMock(return_value=ctx)
+        mock_session_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        nodes = [_make_node("h1", 5001)]
+        result = _fetch_from_registry(nodes, "user", "pass", 10.0, market="fx")
+        assert len(result) == 1
+        assert result[0]["dataset"] == "FXR"
+        # FX market uses .qns.getRegistry[]
+        ctx.raw.assert_called_once_with(".qns.getRegistry[]")
 
     @patch("qorm.qns._resolver.Session")
     def test_failover_to_second_node(self, mock_session_cls: MagicMock) -> None:

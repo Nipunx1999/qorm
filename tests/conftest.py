@@ -31,6 +31,7 @@ class MockKdbServer:
         self._responses: dict[str, Any] = {}
         self._default_response: Any = None
         self._serializer = Serializer()
+        self.compress_responses: bool = False
 
     def set_response(self, query: str, response: Any) -> None:
         """Set a canned response for a specific query string."""
@@ -108,6 +109,17 @@ class MockKdbServer:
                 resp_bytes = self._serializer.serialize_message(
                     response, RESPONSE_MSG
                 )
+                if self.compress_responses:
+                    from qorm.protocol.compress import compress
+                    compressed = compress(resp_bytes, level=1)
+                    if compressed != resp_bytes:
+                        # Build header with compressed flag (byte 2 = 1)
+                        new_header = struct.pack(
+                            '<BBHi', LITTLE_ENDIAN, RESPONSE_MSG,
+                            1, len(compressed) + HEADER_SIZE,
+                        )
+                        client.sendall(new_header + compressed)
+                        continue
                 client.sendall(resp_bytes)
         except (OSError, Exception):
             pass
