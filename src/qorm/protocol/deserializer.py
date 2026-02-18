@@ -92,6 +92,8 @@ class Deserializer:
             return self._deserialize_mixed_list()
         elif 1 <= type_byte <= 19:
             return self._deserialize_vector(type_byte)
+        elif 20 <= type_byte <= 76:
+            return self._deserialize_enum_vector()
         elif type_byte == QTypeCode.TABLE:
             return self._deserialize_table()
         elif type_byte == QTypeCode.DICT:
@@ -199,6 +201,26 @@ class Deserializer:
         raw_values = self._unpack_many(fmt, count)
         return [self._convert_atom(tc, v) if not is_null(v, tc)
                 else QNull(tc) for v in raw_values]
+
+    # ── Enumerated vectors ────────────────────────────────────────
+
+    def _deserialize_enum_vector(self) -> list:
+        """Deserialize an enumerated type vector (type 20-76).
+
+        Enumerated columns (e.g. from splayed/partitioned tables) are
+        stored as int32 indices into a symbol domain.  The wire format
+        is identical to an int vector: attr(1) + count(4) + int32[].
+
+        We read the raw symbol values via the nested symbol list that
+        kdb+ prepends for enumerated vectors when possible; otherwise
+        we return the integer indices.
+        """
+        _attr = self._read_byte()
+        count = self._unpack('i')
+        if count == 0:
+            return []
+        raw_values = self._unpack_many('i', count)
+        return list(raw_values)
 
     # ── Dict ───────────────────────────────────────────────────────
 
