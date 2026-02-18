@@ -59,3 +59,19 @@ class EngineNotFoundError(QormError):
 
 class ReflectionError(QormError):
     """Error reflecting table metadata from kdb+."""
+
+
+class QNSError(QormError):
+    """Base exception for QNS (Q Name Service) errors."""
+
+
+class QNSConfigError(QNSError):
+    """CSV missing, empty, malformed, or bad service name format."""
+
+
+class QNSRegistryError(QNSError):
+    """All registry nodes unreachable."""
+
+
+class QNSServiceNotFoundError(QNSError):
+    """Service not found in registry results."""

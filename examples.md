@@ -15,6 +15,7 @@ from qorm import EngineRegistry, EngineGroup, QFunction, q_api, Subscriber
 from qorm import xbar_, today_, now_, fby_, each_, peach_
 from qorm import ExecQuery, paginate, async_paginate, RetryPolicy
 from qorm import engines_from_config, group_from_config, load_config
+from qorm import QNS, ServiceInfo
 ```
 
 ---
@@ -1207,4 +1208,170 @@ with equities.session("rdb") as s:
         df = page.to_dataframe()
         # process(df)
         print(f"  Processed {len(page)} rows")
+```
+
+---
+
+## 41. Service discovery with QNS — one-liner
+
+Connect to a named kdb+ service without knowing its host:port. The QNS client reads registry nodes from a CSV, queries the QNS registry, and resolves the endpoint.
+
+```python
+from qorm import Engine, Session
+
+# All you need is the service name, market, and environment
+engine = Engine.from_service(
+    "EMRATESCV.SERVICE.HDB.1",
+    market="fx",
+    env="prod",
+    username="svc_user",
+    password="secret",
+)
+
+with Session(engine) as s:
+    # You're connected — use all the usual ORM features
+    Trade = s.reflect("trade")
+    result = s.exec(Trade.select().limit(10))
+    for row in result:
+        print(row.sym, row.price)
+```
+
+---
+
+## 42. QNS — browse and discover services
+
+Use the `QNS` client to explore what services are available before connecting.
+
+```python
+from qorm import QNS
+
+qns = QNS(market="fx", env="prod", username="svc_user", password="secret")
+
+# Browse all services matching a prefix
+services = qns.lookup("EMR", "SER", "H")
+
+for svc in services:
+    print(f"{svc.fqn}  →  {svc.host}:{svc.port}  tls={svc.tls}")
+    # EMRATESCV.SERVICE.HDB.1  →  host1.example.com:5010  tls=True
+    # EMRATESCV.SERVICE.HDB.2  →  host2.example.com:5011  tls=True
+```
+
+---
+
+## 43. QNS — resolve a single service to an Engine
+
+```python
+from qorm import QNS, Session
+
+qns = QNS(market="fx", env="prod", username="svc_user", password="secret")
+
+engine = qns.engine("EMRATESCV.SERVICE.HDB.1")
+print(engine)  # Engine(host='host1.example.com', port=5010, tls=True)
+
+with Session(engine) as s:
+    Trade = s.reflect("trade")
+    result = s.exec(
+        Trade.select(Trade.sym, avg_price=avg_(Trade.price))
+             .by(Trade.sym)
+    )
+    df = result.to_dataframe()
+    print(df.head())
+```
+
+---
+
+## 44. QNS — multi-node engines for failover
+
+Resolve all nodes of a service cluster to build a failover or round-robin pool.
+
+```python
+from qorm import QNS, Session
+
+qns = QNS(market="fx", env="prod", username="svc_user", password="secret")
+
+# Get engines for all HDB nodes in the EMRATESCV.SERVICE cluster
+engines = qns.engines("EMRATESCV", "SERVICE", "HDB")
+
+print(f"Found {len(engines)} nodes:")
+for eng in engines:
+    print(f"  {eng}")
+    # Engine(host='host1.example.com', port=5010, tls=True)
+    # Engine(host='host2.example.com', port=5011, tls=True)
+
+# Use the first available node
+for eng in engines:
+    try:
+        with Session(eng) as s:
+            result = s.raw("select count i from trade")
+            print(f"Connected to {eng.host}:{eng.port}, rows: {result}")
+            break
+    except Exception:
+        print(f"Node {eng.host}:{eng.port} unavailable, trying next...")
+```
+
+---
+
+## 45. QNS — custom CSV directory
+
+Point to your own directory of registry CSV files instead of the bundled defaults.
+
+```python
+from qorm import QNS
+
+# CSV files are named {market}_{env}.csv, e.g. fx_prod.csv
+# Expected format:
+#   dataset,cluster,dbtype,node,host,port,port_env,env
+#   EMRATESCV,SERVICE,HDB,1,host1.example.com,5010,QNS_PORT,prod
+
+qns = QNS(
+    market="fx",
+    env="prod",
+    username="svc_user",
+    password="secret",
+    data_dir="/etc/qns/registries",
+)
+
+services = qns.lookup("EMR")
+for svc in services:
+    print(svc.fqn, svc.host, svc.port)
+```
+
+---
+
+## 46. QNS — error handling
+
+```python
+from qorm import QNS, Engine
+from qorm.exc import QNSConfigError, QNSRegistryError, QNSServiceNotFoundError
+
+# --- Missing or malformed CSV ---
+try:
+    qns = QNS(market="nonexistent", env="prod")
+except QNSConfigError as e:
+    print(f"Config error: {e}")
+    # Config error: Registry CSV not found in package data: nonexistent_prod.csv
+
+# --- Bad service name format ---
+try:
+    qns = QNS(market="fx", env="prod", data_dir="/path/to/csvs")
+    qns.engine("ONLY.TWO.PARTS")
+except QNSConfigError as e:
+    print(f"Config error: {e}")
+    # Config error: Service name must be DATASET.CLUSTER.DBTYPE.NODE, got 3 part(s)
+
+# --- All registry nodes unreachable ---
+try:
+    qns = QNS(market="fx", env="prod", data_dir="/path/to/csvs")
+    services = qns.lookup("EMR")
+except QNSRegistryError as e:
+    print(f"Registry error: {e}")
+    # Registry error: All 2 registry node(s) unreachable: ...
+
+# --- Service not found ---
+try:
+    qns = QNS(market="fx", env="prod", data_dir="/path/to/csvs")
+    engine = qns.engine("NONEXISTENT.SERVICE.HDB.1")
+except QNSServiceNotFoundError as e:
+    print(f"Not found: {e}")
+    # Not found: Service not found: 'NONEXISTENT.SERVICE.HDB.1'
 ```

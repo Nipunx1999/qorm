@@ -97,6 +97,41 @@ class Engine:
             tls_context=self._get_ssl_context(),
         )
 
+    @classmethod
+    def from_service(
+        cls,
+        service_name: str,
+        *,
+        market: str,
+        env: str,
+        username: str = "",
+        password: str = "",
+        timeout: float = 10.0,
+        data_dir: Any = None,
+    ) -> Engine:
+        """Create an Engine by resolving a QNS service name.
+
+        Parameters
+        ----------
+        service_name:
+            Fully-qualified name: ``DATASET.CLUSTER.DBTYPE.NODE``.
+        market:
+            Market identifier (e.g. ``"fx"``).
+        env:
+            Environment identifier (e.g. ``"prod"``).
+        """
+        from .qns import QNS
+
+        qns = QNS(
+            market=market,
+            env=env,
+            username=username,
+            password=password,
+            timeout=timeout,
+            data_dir=data_dir,
+        )
+        return qns.engine(service_name)
+
     def __repr__(self) -> str:
         tls_str = ', tls=True' if self.tls else ''
         return f"Engine(host={self.host!r}, port={self.port}{tls_str})"

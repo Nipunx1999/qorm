@@ -71,7 +71,9 @@ from .exc import (
     SerializationError, DeserializationError, QueryError, QError,
     ModelError, SchemaError, PoolError, PoolExhaustedError,
     EngineNotFoundError, ReflectionError,
+    QNSError, QNSConfigError, QNSRegistryError, QNSServiceNotFoundError,
 )
+from .qns import QNS, ServiceInfo
 
 __version__ = "0.1.0"
 
@@ -114,4 +116,7 @@ __all__ = [
     'SerializationError', 'DeserializationError', 'QueryError', 'QError',
     'ModelError', 'SchemaError', 'PoolError', 'PoolExhaustedError',
     'EngineNotFoundError', 'ReflectionError',
+    'QNSError', 'QNSConfigError', 'QNSRegistryError', 'QNSServiceNotFoundError',
+    # QNS
+    'QNS', 'ServiceInfo',
 ]

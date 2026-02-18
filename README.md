@@ -99,6 +99,12 @@ with Session(engine) as s:
   - [Ad-hoc Calls](#ad-hoc-calls)
   - [QFunction Wrapper](#qfunction-wrapper)
   - [Typed Decorator (q_api)](#typed-decorator-q_api)
+- [Service Discovery (QNS)](#service-discovery-qns)
+  - [One-liner with Engine.from_service](#one-liner-with-enginefrom_service)
+  - [QNS Client](#qns-client)
+  - [Browsing Services](#browsing-services)
+  - [Multi-node Engines](#multi-node-engines)
+  - [Custom Registry CSV](#custom-registry-csv)
 - [Multi-Instance Registry](#multi-instance-registry)
   - [EngineRegistry](#engineregistry)
   - [EngineGroup](#enginegroup)
@@ -509,6 +515,18 @@ engine = Engine.from_dsn("kdb+tls://user:pass@kdb-server:5000") # with TLS
 ```
 
 **Format:** `kdb://[user:pass@]host:port` or `kdb+tls://[user:pass@]host:port`
+
+### From QNS Service Discovery
+
+Resolve a named kdb+ service via QNS (see [Service Discovery](#service-discovery-qns)):
+
+```python
+engine = Engine.from_service(
+    "EMRATESCV.SERVICE.HDB.1",
+    market="fx", env="prod",
+    username="user", password="pass",
+)
+```
 
 ### Creating Connections
 
@@ -1220,6 +1238,113 @@ async with AsyncSession(engine) as s:
 
 ---
 
+## Service Discovery (QNS)
+
+kdb+ environments commonly use a Q Name Service (QNS) for service discovery. Registry nodes are listed in CSV files keyed by market and environment (e.g. `fx_prod.csv`). qorm's `QNS` client connects to a registry node, queries `.qns.svcs` with prefix filters, and resolves actual service endpoints — so you never need to hardcode host:port values.
+
+Services follow the naming convention `DATASET.CLUSTER.DBTYPE.NODE` (e.g. `EMRATESCV.SERVICE.HDB.1`).
+
+### One-liner with Engine.from_service
+
+The simplest way to connect to a named service:
+
+```python
+from qorm import Engine
+
+engine = Engine.from_service(
+    "EMRATESCV.SERVICE.HDB.1",
+    market="fx",
+    env="prod",
+    username="user",
+    password="pass",
+)
+```
+
+This loads the registry CSV for `fx_prod`, connects to a registry node, looks up the service, and returns a configured `Engine` with the resolved host, port, and TLS settings.
+
+### QNS Client
+
+For more control, create a reusable `QNS` instance:
+
+```python
+from qorm import QNS
+
+qns = QNS(market="fx", env="prod", username="user", password="pass")
+
+# Resolve a single service to an Engine
+engine = qns.engine("EMRATESCV.SERVICE.HDB.1")
+```
+
+**QNS constructor parameters:**
+
+| Parameter  | Type              | Default | Description                                |
+|------------|-------------------|---------|--------------------------------------------|
+| `market`   | `str`             | —       | Market identifier (e.g. `"fx"`)            |
+| `env`      | `str`             | —       | Environment identifier (e.g. `"prod"`)     |
+| `username` | `str`             | `""`    | Credentials for registry + resolved services |
+| `password` | `str`             | `""`    | Credentials for registry + resolved services |
+| `timeout`  | `float`           | `10.0`  | Connection timeout in seconds              |
+| `data_dir` | `str \| Path \| None` | `None` | Directory with CSV files (defaults to bundled `qorm.qns.data`) |
+
+### Browsing Services
+
+Use `lookup()` to discover services by prefix:
+
+```python
+# Find all services starting with EMR / SER / H
+services = qns.lookup("EMR", "SER", "H")
+
+for svc in services:
+    print(svc.fqn, svc.host, svc.port, svc.tls)
+```
+
+Each result is a `ServiceInfo` dataclass:
+
+| Field     | Type   | Description                                    |
+|-----------|--------|------------------------------------------------|
+| `dataset` | `str`  | Dataset part of the service name               |
+| `cluster` | `str`  | Cluster part                                   |
+| `dbtype`  | `str`  | Database type (HDB, RDB, etc.)                 |
+| `node`    | `str`  | Node identifier                                |
+| `host`    | `str`  | Resolved hostname                              |
+| `port`    | `int`  | Resolved port                                  |
+| `ssl`     | `str`  | SSL mode string from registry (`"tls"`, `"none"`, etc.) |
+| `ip`      | `str`  | IP address                                     |
+| `env`     | `str`  | Environment                                    |
+| `.tls`    | `bool` | Property: `True` if `ssl` is `"tls"` (case-insensitive) |
+| `.fqn`    | `str`  | Property: `"DATASET.CLUSTER.DBTYPE.NODE"`      |
+
+### Multi-node Engines
+
+Resolve all matching services to a list of engines — useful for building failover or round-robin pools:
+
+```python
+engines = qns.engines("EMRATESCV", "SERVICE", "HDB")
+# Returns [Engine(..., port=5010), Engine(..., port=5011), ...]
+```
+
+### Custom Registry CSV
+
+Registry CSV files live in `src/qorm/qns/data/` by default (named `{market}_{env}.csv`). You can also point to a custom directory:
+
+```python
+qns = QNS(market="fx", env="prod", data_dir="/path/to/csv/dir")
+```
+
+**CSV format:**
+
+```csv
+dataset,cluster,dbtype,node,host,port,port_env,env
+EMRATESCV,SERVICE,HDB,1,host1.example.com,5010,QNS_PORT,prod
+EMRATESCV,SERVICE,HDB,2,host2.example.com,5011,QNS_PORT,prod
+```
+
+Required columns: `dataset`, `cluster`, `dbtype`, `node`, `host`, `port`, `port_env`, `env`.
+
+The QNS client tries each registry node in order. If a node is unreachable, it logs a warning and fails over to the next one. If all nodes fail, a `QNSRegistryError` is raised with details for each failure.
+
+---
+
 ## Multi-Instance Registry
 
 Manage connections to multiple kdb+ processes — organized by data domain (equities, FX) and instance type (RDB, HDB, gateway).
@@ -1639,6 +1764,7 @@ qorm uses Python's standard `logging` module. All log messages go through named 
 | `qorm`               | Session operations (exec, raw, call) with query text and timing |
 | `qorm.connection`    | Connection open/close events               |
 | `qorm.pool`          | Pool acquire/release, health checks        |
+| `qorm.qns`            | QNS registry queries, failover attempts    |
 | `qorm.subscription`  | Subscriber connect, subscribe, updates     |
 
 **Enable debug logging:**
@@ -1721,7 +1847,11 @@ QormError                       # Base for all qorm errors
 ├── ModelError                  # Model definition error
 ├── SchemaError                 # DDL error
 ├── EngineNotFoundError         # Named engine not found in registry
-└── ReflectionError             # Error reflecting table metadata
+├── ReflectionError             # Error reflecting table metadata
+└── QNSError                    # Base for QNS service discovery errors
+    ├── QNSConfigError          # CSV missing/empty/malformed, bad service name
+    ├── QNSRegistryError        # All registry nodes unreachable
+    └── QNSServiceNotFoundError # Service not found in registry results
 ```
 
 ### Catching q-level errors
@@ -1879,11 +2009,15 @@ from qorm import (
     # Subscription
     Subscriber,
 
+    # Service Discovery (QNS)
+    QNS, ServiceInfo,
+
     # Exceptions
     QormError, ConnectionError, HandshakeError, AuthenticationError,
     SerializationError, DeserializationError, QueryError, QError,
     ModelError, SchemaError, PoolError, PoolExhaustedError,
     EngineNotFoundError, ReflectionError,
+    QNSError, QNSConfigError, QNSRegistryError, QNSServiceNotFoundError,
 )
 ```
 
