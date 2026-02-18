@@ -62,15 +62,30 @@ def _parse_meta_result(meta_data: dict[str, list] | Any) -> list[tuple[str, str]
     - ``f`` : foreign key info
     - ``a`` : attributes
 
-    The deserialized form is a dict with these keys.
+    The deserialized form may be either:
+    - A flat dict with keys ``c``, ``t``, ``f``, ``a`` (simple table)
+    - A keyed table dict with ``keys`` and ``values`` sub-dicts,
+      where ``c`` is in ``keys`` and ``t``, ``f``, ``a`` are in ``values``
     """
     if not isinstance(meta_data, dict):
         raise ReflectionError(
             f"Expected dict from meta, got {type(meta_data).__name__}"
         )
 
-    columns = meta_data.get('c')
-    type_chars = meta_data.get('t')
+    # Handle keyed table format: {'keys': {'c': [...]}, 'values': {'t': '...', ...}}
+    if 'keys' in meta_data and 'values' in meta_data:
+        keys_part = meta_data['keys']
+        values_part = meta_data['values']
+        if isinstance(keys_part, dict) and isinstance(values_part, dict):
+            # Strip internal markers
+            columns = keys_part.get('c')
+            type_chars = values_part.get('t')
+        else:
+            columns = None
+            type_chars = None
+    else:
+        columns = meta_data.get('c')
+        type_chars = meta_data.get('t')
 
     if columns is None or type_chars is None:
         raise ReflectionError(

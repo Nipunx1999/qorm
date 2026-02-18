@@ -92,6 +92,40 @@ class TestParseMetaResult:
         result = _parse_meta_result(meta)
         assert result == [('sym', 's')]
 
+    def test_keyed_table_format(self):
+        """meta returns a keyed table: {'keys': {'c': [...]}, 'values': {'t': '...', ...}}."""
+        meta = {
+            'keys': {
+                'c': ['sym', 'price', 'size'],
+                '__table__': True,
+            },
+            'values': {
+                't': 'sfj',
+                'f': ['', '', ''],
+                'a': ['', '', ''],
+                '__table__': True,
+            },
+        }
+        result = _parse_meta_result(meta)
+        assert result == [('sym', 's'), ('price', 'f'), ('size', 'j')]
+
+    def test_keyed_table_format_with_spaces(self):
+        """Keyed table format where type chars include spaces for mixed list columns."""
+        meta = {
+            'keys': {
+                'c': ['date', 'isin', 'tags'],
+                '__table__': True,
+            },
+            'values': {
+                't': 'ds ',
+                'f': ['', '', ''],
+                'a': ['', '', ''],
+                '__table__': True,
+            },
+        }
+        result = _parse_meta_result(meta)
+        assert result == [('date', 'd'), ('isin', 's'), ('tags', ' ')]
+
 
 class TestBuildModelFromMeta:
     def test_basic_model(self):
@@ -185,6 +219,28 @@ class TestBuildModelFromMeta:
             meta = {'c': ['col'], 't': [char], 'f': [''], 'a': ['']}
             M = build_model_from_meta(f'tbl_{char}', meta)
             assert M.__fields__['col'].qtype.code == code
+
+    def test_build_from_keyed_table_format(self):
+        """build_model_from_meta works with keyed table meta format."""
+        meta = {
+            'keys': {
+                'c': ['sym', 'price', 'size', 'time'],
+                '__table__': True,
+            },
+            'values': {
+                't': 'sfjp',
+                'f': ['', '', '', ''],
+                'a': ['', '', '', ''],
+                '__table__': True,
+            },
+        }
+        Trade = build_model_from_meta('trade', meta)
+        assert Trade.__tablename__ == 'trade'
+        assert set(Trade.__fields__) == {'sym', 'price', 'size', 'time'}
+        assert Trade.__fields__['sym'].qtype.code == QTypeCode.SYMBOL
+        assert Trade.__fields__['price'].qtype.code == QTypeCode.FLOAT
+        assert Trade.__fields__['size'].qtype.code == QTypeCode.LONG
+        assert Trade.__fields__['time'].qtype.code == QTypeCode.TIMESTAMP
 
 
 class TestSessionReflection:
