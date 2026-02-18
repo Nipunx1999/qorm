@@ -68,7 +68,7 @@ class TestQNSLookup:
     ) -> None:
         mock_load.return_value = [MagicMock()]
         mock_resolve.return_value = _make_service_rows(
-            "EMR.SVC.HDB.1", "EMR.SVC.HDB.2"
+            "EMR.SVC.HDB.1", "EMR.SVC.HDB.2", "FXR.SVC.RDB.1"
         )
         qns = QNS(market="fx", env="prod")
         services = qns.lookup("EMR", "SVC", "HDB")
@@ -76,6 +76,19 @@ class TestQNSLookup:
         assert all(isinstance(s, ServiceInfo) for s in services)
         assert services[0].fqn == "EMR.SVC.HDB.1"
         assert services[1].fqn == "EMR.SVC.HDB.2"
+
+    @patch("qorm.qns.resolve_services")
+    @patch("qorm.qns.load_registry_nodes")
+    def test_no_prefixes_returns_all(
+        self, mock_load: MagicMock, mock_resolve: MagicMock
+    ) -> None:
+        mock_load.return_value = [MagicMock()]
+        mock_resolve.return_value = _make_service_rows(
+            "EMR.SVC.HDB.1", "FXR.SVC.RDB.1"
+        )
+        qns = QNS(market="fx", env="prod")
+        services = qns.lookup()
+        assert len(services) == 2
 
 
 class TestQNSEngine:
@@ -101,7 +114,8 @@ class TestQNSEngine:
         self, mock_load: MagicMock, mock_resolve: MagicMock
     ) -> None:
         mock_load.return_value = [MagicMock()]
-        mock_resolve.return_value = _make_service_rows("OTHER.SVC.HDB.1")
+        # Prefix matches (EMR.SVC.HDB) but node "99" doesn't match "1"
+        mock_resolve.return_value = _make_service_rows("EMR.SVC.HDB.99")
         qns = QNS(market="fx", env="prod")
         with pytest.raises(QNSServiceNotFoundError, match="not found"):
             qns.engine("EMR.SVC.HDB.1")
@@ -129,6 +143,28 @@ class TestQNSEngines:
         assert all(isinstance(e, Engine) for e in engines)
         assert engines[0].port == 5010
         assert engines[2].port == 5012
+
+
+class TestQNSClearCache:
+    @patch("qorm.qns.load_registry_nodes")
+    def test_clear_cache_removes_file(self, mock_load: MagicMock, tmp_path) -> None:
+        mock_load.return_value = [MagicMock()]
+        cache_file = tmp_path / "fx_prod.json"
+        cache_file.write_text("{}", encoding="utf-8")
+
+        with patch("qorm.qns._cache_path", return_value=cache_file):
+            qns = QNS(market="fx", env="prod")
+            qns.clear_cache()
+        assert not cache_file.exists()
+
+    @patch("qorm.qns.load_registry_nodes")
+    def test_clear_cache_no_file_is_noop(self, mock_load: MagicMock, tmp_path) -> None:
+        mock_load.return_value = [MagicMock()]
+        cache_file = tmp_path / "fx_prod.json"
+
+        with patch("qorm.qns._cache_path", return_value=cache_file):
+            qns = QNS(market="fx", env="prod")
+            qns.clear_cache()  # should not raise
 
 
 class TestEngineFromService:

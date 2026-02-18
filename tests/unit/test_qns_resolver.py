@@ -1,25 +1,24 @@
-"""Tests for qorm.qns._resolver — query building, parsing, and failover."""
+"""Tests for qorm.qns._resolver — parsing, caching, filtering, and failover."""
 
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 
 from qorm.exc import QNSRegistryError
 from qorm.qns._registry import RegistryNode
-from qorm.qns._resolver import _build_svcs_query, _parse_service_rows, resolve_services
-
-
-class TestBuildSvcsQuery:
-    def test_no_prefixes(self) -> None:
-        assert _build_svcs_query(()) == ".qns.registry"
-
-    def test_one_prefix(self) -> None:
-        assert _build_svcs_query(("EMR",)) == ".qns.svcs`EMR"
-
-    def test_three_prefixes(self) -> None:
-        assert _build_svcs_query(("EMR", "SER", "H")) == ".qns.svcs`EMR`SER`H"
+from qorm.qns._resolver import (
+    _parse_service_rows,
+    _load_cache,
+    _save_cache,
+    _fetch_from_registry,
+    resolve_services,
+    filter_by_prefix,
+)
 
 
 class TestParseServiceRows:
@@ -52,6 +51,80 @@ class TestParseServiceRows:
             _parse_service_rows("not a dict")
 
 
+class TestFilterByPrefix:
+    ROWS = [
+        {"dataset": "EMR", "cluster": "SVC", "dbtype": "HDB", "node": "1"},
+        {"dataset": "EMR", "cluster": "SVC", "dbtype": "RDB", "node": "1"},
+        {"dataset": "FXR", "cluster": "SVC", "dbtype": "HDB", "node": "1"},
+    ]
+
+    def test_no_prefix_returns_all(self) -> None:
+        assert len(filter_by_prefix(self.ROWS, ())) == 3
+
+    def test_one_prefix(self) -> None:
+        result = filter_by_prefix(self.ROWS, ("EMR",))
+        assert len(result) == 2
+        assert all(r["dataset"] == "EMR" for r in result)
+
+    def test_two_prefixes(self) -> None:
+        result = filter_by_prefix(self.ROWS, ("EMR", "SVC"))
+        assert len(result) == 2
+
+    def test_three_prefixes(self) -> None:
+        result = filter_by_prefix(self.ROWS, ("EMR", "SVC", "HDB"))
+        assert len(result) == 1
+        assert result[0]["dbtype"] == "HDB"
+
+    def test_case_insensitive(self) -> None:
+        result = filter_by_prefix(self.ROWS, ("emr",))
+        assert len(result) == 2
+
+    def test_prefix_matching(self) -> None:
+        result = filter_by_prefix(self.ROWS, ("E",))
+        assert len(result) == 2  # EMR matches "E"
+
+    def test_no_match(self) -> None:
+        result = filter_by_prefix(self.ROWS, ("ZZZ",))
+        assert len(result) == 0
+
+
+class TestFileCache:
+    def test_save_and_load(self, tmp_path: Path) -> None:
+        rows = [{"dataset": "A", "host": "h1", "port": 5000}]
+        with patch("qorm.qns._resolver.CACHE_DIR", tmp_path):
+            _save_cache("fx", "prod", rows)
+            loaded = _load_cache("fx", "prod", cache_ttl=3600)
+        assert loaded == rows
+
+    def test_expired_cache_returns_none(self, tmp_path: Path) -> None:
+        cache_file = tmp_path / "fx_prod.json"
+        payload = {"timestamp": time.time() - 100, "services": [{"x": 1}]}
+        cache_file.write_text(json.dumps(payload), encoding="utf-8")
+        with patch("qorm.qns._resolver.CACHE_DIR", tmp_path):
+            result = _load_cache("fx", "prod", cache_ttl=50)
+        assert result is None
+
+    def test_fresh_cache_returns_data(self, tmp_path: Path) -> None:
+        cache_file = tmp_path / "fx_prod.json"
+        payload = {"timestamp": time.time(), "services": [{"x": 1}]}
+        cache_file.write_text(json.dumps(payload), encoding="utf-8")
+        with patch("qorm.qns._resolver.CACHE_DIR", tmp_path):
+            result = _load_cache("fx", "prod", cache_ttl=3600)
+        assert result == [{"x": 1}]
+
+    def test_corrupt_cache_returns_none(self, tmp_path: Path) -> None:
+        cache_file = tmp_path / "fx_prod.json"
+        cache_file.write_text("not valid json", encoding="utf-8")
+        with patch("qorm.qns._resolver.CACHE_DIR", tmp_path):
+            result = _load_cache("fx", "prod", cache_ttl=3600)
+        assert result is None
+
+    def test_missing_cache_returns_none(self, tmp_path: Path) -> None:
+        with patch("qorm.qns._resolver.CACHE_DIR", tmp_path):
+            result = _load_cache("fx", "prod", cache_ttl=3600)
+        assert result is None
+
+
 def _make_node(host: str = "h1", port: int = 5001) -> RegistryNode:
     return RegistryNode(
         dataset="REG", cluster="SVC", dbtype="QNS", node="1",
@@ -59,7 +132,7 @@ def _make_node(host: str = "h1", port: int = 5001) -> RegistryNode:
     )
 
 
-class TestResolveServices:
+class TestFetchFromRegistry:
     @patch("qorm.qns._resolver.Session")
     def test_first_node_succeeds(self, mock_session_cls: MagicMock) -> None:
         ctx = MagicMock()
@@ -78,15 +151,15 @@ class TestResolveServices:
         mock_session_cls.return_value.__exit__ = MagicMock(return_value=False)
 
         nodes = [_make_node("h1", 5001), _make_node("h2", 5002)]
-        result = resolve_services(nodes, ("EMR",), "user", "pass", 10.0)
+        result = _fetch_from_registry(nodes, "user", "pass", 10.0)
         assert len(result) == 1
         assert result[0]["dataset"] == "EMR"
-        # Should only have been called once (first node succeeded)
         assert mock_session_cls.call_count == 1
+        # Verify it queries .qns.registry
+        ctx.raw.assert_called_once_with(".qns.registry")
 
     @patch("qorm.qns._resolver.Session")
     def test_failover_to_second_node(self, mock_session_cls: MagicMock) -> None:
-        # First call raises, second succeeds
         good_ctx = MagicMock()
         good_ctx.raw.return_value = {
             "dataset": ["X"], "cluster": ["Y"], "dbtype": ["Z"],
@@ -109,7 +182,7 @@ class TestResolveServices:
         mock_session_cls.side_effect = side_effect
 
         nodes = [_make_node("h1", 5001), _make_node("h2", 5002)]
-        result = resolve_services(nodes, (), "u", "p", 5.0)
+        result = _fetch_from_registry(nodes, "u", "p", 5.0)
         assert len(result) == 1
         assert result[0]["dataset"] == "X"
 
@@ -122,4 +195,38 @@ class TestResolveServices:
 
         nodes = [_make_node("h1", 5001), _make_node("h2", 5002)]
         with pytest.raises(QNSRegistryError, match="All 2 registry"):
-            resolve_services(nodes, (), "u", "p", 5.0)
+            _fetch_from_registry(nodes, "u", "p", 5.0)
+
+
+class TestResolveServicesWithCache:
+    def test_uses_cache_when_fresh(self, tmp_path: Path) -> None:
+        cached_rows = [{"dataset": "CACHED", "host": "h", "port": 1}]
+        cache_file = tmp_path / "fx_prod.json"
+        payload = {"timestamp": time.time(), "services": cached_rows}
+        cache_file.write_text(json.dumps(payload), encoding="utf-8")
+
+        with patch("qorm.qns._resolver.CACHE_DIR", tmp_path):
+            result = resolve_services(
+                [_make_node()], "u", "p", 10.0,
+                market="fx", env="prod", cache_ttl=3600,
+            )
+        assert result == cached_rows
+
+    @patch("qorm.qns._resolver._fetch_from_registry")
+    def test_fetches_when_cache_expired(
+        self, mock_fetch: MagicMock, tmp_path: Path
+    ) -> None:
+        cache_file = tmp_path / "fx_prod.json"
+        payload = {"timestamp": time.time() - 1000, "services": []}
+        cache_file.write_text(json.dumps(payload), encoding="utf-8")
+
+        fresh_rows = [{"dataset": "FRESH", "host": "h", "port": 2}]
+        mock_fetch.return_value = fresh_rows
+
+        with patch("qorm.qns._resolver.CACHE_DIR", tmp_path):
+            result = resolve_services(
+                [_make_node()], "u", "p", 10.0,
+                market="fx", env="prod", cache_ttl=500,
+            )
+        assert result == fresh_rows
+        mock_fetch.assert_called_once()

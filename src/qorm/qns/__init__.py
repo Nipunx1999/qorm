@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING
 
 from ..exc import QNSConfigError, QNSServiceNotFoundError
 from ._registry import load_registry_nodes
-from ._resolver import resolve_services
+from ._resolver import (
+    DEFAULT_CACHE_TTL,
+    resolve_services,
+    filter_by_prefix,
+    _cache_path,
+)
 
 if TYPE_CHECKING:
     from ..engine import Engine
@@ -42,6 +47,9 @@ class ServiceInfo:
 class QNS:
     """Q Name Service client — discovers kdb+ service endpoints.
 
+    Queries ``.qns.registry`` and caches the full result to disk
+    (default TTL: 7 days).  Prefix filtering is done client-side.
+
     Usage::
 
         qns = QNS(market="fx", env="prod", username="user", password="pass")
@@ -56,6 +64,7 @@ class QNS:
         username: str = "",
         password: str = "",
         timeout: float = 10.0,
+        cache_ttl: float = DEFAULT_CACHE_TTL,
         data_dir: str | Path | None = None,
     ) -> None:
         self._market = market
@@ -63,10 +72,14 @@ class QNS:
         self._username = username
         self._password = password
         self._timeout = timeout
+        self._cache_ttl = cache_ttl
         self._registry_nodes = load_registry_nodes(market, env, data_dir=data_dir)
 
     def lookup(self, *prefixes: str) -> list[ServiceInfo]:
         """Query QNS registry and return matching services.
+
+        The full registry is fetched (or served from cache) and then
+        filtered client-side by prefix.
 
         Parameters
         ----------
@@ -83,14 +96,17 @@ class QNS:
         QNSServiceNotFoundError
             If no services match the given prefixes.
         """
-        rows = resolve_services(
+        all_rows = resolve_services(
             self._registry_nodes,
-            prefixes,
             self._username,
             self._password,
             self._timeout,
+            market=self._market,
+            env=self._env,
+            cache_ttl=self._cache_ttl,
         )
-        services = [_row_to_service_info(r) for r in rows]
+        filtered = filter_by_prefix(all_rows, prefixes)
+        services = [_row_to_service_info(r) for r in filtered]
         if not services:
             raise QNSServiceNotFoundError(
                 f"No services match prefix: {'.'.join(prefixes) or '(all)'}"
@@ -130,6 +146,12 @@ class QNS:
         Useful for building failover or round-robin pools.
         """
         return [self._build_engine(svc) for svc in self.lookup(*prefixes)]
+
+    def clear_cache(self) -> None:
+        """Delete the cache file for this market/env."""
+        path = _cache_path(self._market, self._env)
+        if path.exists():
+            path.unlink()
 
     def _build_engine(self, svc: ServiceInfo) -> Engine:
         from ..engine import Engine

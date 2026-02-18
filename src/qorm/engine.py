@@ -107,6 +107,7 @@ class Engine:
         username: str = "",
         password: str = "",
         timeout: float = 10.0,
+        cache_ttl: float | None = None,
         data_dir: Any = None,
     ) -> Engine:
         """Create an Engine by resolving a QNS service name.
@@ -119,10 +120,12 @@ class Engine:
             Market identifier (e.g. ``"fx"``).
         env:
             Environment identifier (e.g. ``"prod"``).
+        cache_ttl:
+            Cache lifetime in seconds (default 7 days).
         """
         from .qns import QNS
 
-        qns = QNS(
+        kwargs: dict[str, Any] = dict(
             market=market,
             env=env,
             username=username,
@@ -130,6 +133,10 @@ class Engine:
             timeout=timeout,
             data_dir=data_dir,
         )
+        if cache_ttl is not None:
+            kwargs["cache_ttl"] = cache_ttl
+
+        qns = QNS(**kwargs)
         return qns.engine(service_name)
 
     def __repr__(self) -> str:
