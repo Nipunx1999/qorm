@@ -136,9 +136,9 @@ def decompress(data: bytes, header_bytes: bytes = b'') -> bytes:
     if len(data) < 8:
         return data
 
-    # Compression sub-header
+    # Compression sub-header: bytes 0-3 = uncompressed total length,
+    # bytes 4-7 are unused padding (kdb+ writes 0 there).
     uncompressed_len = struct.unpack_from('<i', data, 0)[0]
-    d = struct.unpack_from('<i', data, 4)[0]
 
     dst = bytearray(uncompressed_len)
     aa = [0] * 256  # hash table: XOR hash → position in output
@@ -156,6 +156,7 @@ def decompress(data: bytes, header_bytes: bytes = b'') -> bytes:
 
     s = 8  # output position (positions 0-7 are the header)
     p = 8  # input position (skip compression sub-header)
+    d = s  # hash cursor — always starts at s, matching c.java reference
     i = 0  # bit multiplier (0 means need fresh control byte)
     f = 0  # control byte
 
