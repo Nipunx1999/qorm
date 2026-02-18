@@ -296,6 +296,13 @@ class TestFunctionTypes:
         _, result = self.des.deserialize_message(self._msg(payload))
         assert result == "hello"
 
+    def test_adverb_type_120(self):
+        # Extended function range (118-126) wraps a serialized object
+        inner = bytes([256 - 7]) + struct.pack('<q', 77)
+        payload = bytes([120]) + inner
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert result == 77
+
     def test_function_in_mixed_list(self):
         # Mixed list containing a type-116 function wrapping a long
         inner_func = bytes([116]) + bytes([256 - 7]) + struct.pack('<q', 5)
@@ -304,3 +311,27 @@ class TestFunctionTypes:
         _, result = self.des.deserialize_message(self._msg(payload))
         assert isinstance(result, list)
         assert result == [5, 10]
+
+
+class TestAnymapType:
+    """Test type 77 (anymap / mapped list) deserialization."""
+
+    def setup_method(self):
+        self.des = Deserializer()
+
+    def _msg(self, payload: bytes) -> bytes:
+        header = struct.pack('<BBHi', 1, 2, 0, 8 + len(payload))
+        return header + payload
+
+    def test_anymap_type_77(self):
+        # Type 77 has the same wire format as mixed list (type 0)
+        inner1 = bytes([256 - 7]) + struct.pack('<q', 1)
+        inner2 = bytes([256 - 7]) + struct.pack('<q', 2)
+        payload = bytes([77, 0]) + struct.pack('<i', 2) + inner1 + inner2
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert result == [1, 2]
+
+    def test_anymap_empty(self):
+        payload = bytes([77, 0]) + struct.pack('<i', 0)
+        _, result = self.des.deserialize_message(self._msg(payload))
+        assert result == []

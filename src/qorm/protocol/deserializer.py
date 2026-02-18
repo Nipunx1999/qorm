@@ -94,17 +94,22 @@ class Deserializer:
             return self._deserialize_vector(type_byte)
         elif 20 <= type_byte <= 76:
             return self._deserialize_enum_vector()
+        elif type_byte == 77:
+            # Anymap / mapped list (kdb+ 3.6+) — same wire format as mixed list
+            return self._deserialize_mixed_list()
         elif type_byte == QTypeCode.TABLE:
             return self._deserialize_table()
         elif type_byte == QTypeCode.DICT:
             return self._deserialize_dict()
         elif type_byte == QTypeCode.SORTED_DICT:
             return self._deserialize_dict()  # sorted dict same structure
-        elif 100 <= type_byte <= 117:
-            # Lambda/operator/adverb/iterator types
+        elif 100 <= type_byte <= 126:
+            # Lambda/operator/adverb/iterator types (100-126)
             return self._deserialize_function(type_byte)
         else:
-            raise DeserializationError(f"Unknown type byte: {type_byte}")
+            raise DeserializationError(
+                f"Unknown type byte: {type_byte} at position {self._pos - 1}"
+            )
 
     # ── Atoms ──────────────────────────────────────────────────────
 
