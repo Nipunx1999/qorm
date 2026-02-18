@@ -81,8 +81,11 @@ class Deserializer:
     def _deserialize(self) -> Any:
         type_byte = self._read_byte()
 
-        # Signed interpretation: type_byte > 127 means negative (atom)
-        if type_byte >= 128:
+        # Signed interpretation: type_byte > 128 means negative atom type;
+        # type_byte == 128 is -128 (error).
+        if type_byte == 128:
+            return self._deserialize_error()
+        elif type_byte > 128:
             type_code = 256 - type_byte  # recover positive type code
             return self._deserialize_atom(type_code)
         elif type_byte == QTypeCode.MIXED_LIST:
@@ -93,8 +96,6 @@ class Deserializer:
             return self._deserialize_table()
         elif type_byte == QTypeCode.DICT:
             return self._deserialize_dict()
-        elif type_byte == 128:  # -128 as unsigned = error
-            return self._deserialize_error()
         elif type_byte == QTypeCode.SORTED_DICT:
             return self._deserialize_dict()  # sorted dict same structure
         elif 100 <= type_byte <= 111:
