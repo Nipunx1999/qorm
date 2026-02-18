@@ -46,5 +46,9 @@ class DeleteQuery:
             columns=self._columns,
         )
 
+    def explain(self) -> str:
+        """Return the compiled q string without executing."""
+        return f"-- DeleteQuery on `{self.model.__tablename__}\n{self.compile()}"
+
     def __repr__(self) -> str:
         return f"DeleteQuery({self.compile()})"

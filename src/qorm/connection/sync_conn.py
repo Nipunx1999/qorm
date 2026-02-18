@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import socket
+import ssl
 from typing import Any
 
 from ..exc import ConnectionError as QConnError
@@ -12,6 +14,9 @@ from ..protocol.serializer import Serializer
 from ..protocol.deserializer import Deserializer
 from .base import BaseConnection
 from .handshake import build_handshake, parse_handshake_response
+
+
+log = logging.getLogger("qorm.connection")
 
 
 class SyncConnection(BaseConnection):
@@ -24,12 +29,14 @@ class SyncConnection(BaseConnection):
         username: str = "",
         password: str = "",
         timeout: float | None = None,
+        tls_context: ssl.SSLContext | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.timeout = timeout
+        self.tls_context = tls_context
         self._sock: socket.socket | None = None
         self._serializer = Serializer()
         self._deserializer = Deserializer()
@@ -46,9 +53,18 @@ class SyncConnection(BaseConnection):
         except OSError as e:
             raise QConnError(f"Cannot connect to {self.host}:{self.port}: {e}") from e
 
+        if self.tls_context is not None:
+            log.debug("Wrapping socket with TLS for %s:%s", self.host, self.port)
+            try:
+                sock = self.tls_context.wrap_socket(sock, server_hostname=self.host)
+            except ssl.SSLError as e:
+                sock.close()
+                raise QConnError(f"TLS handshake failed with {self.host}:{self.port}: {e}") from e
+
         self._sock = sock
         try:
             self._handshake()
+            log.debug("Connected to %s:%s (capability=%d)", self.host, self.port, self._capability)
         except Exception:
             self._sock.close()
             self._sock = None
@@ -111,3 +127,16 @@ class SyncConnection(BaseConnection):
         else:
             self.send(q_expr)
         return self.receive()
+
+    def ping(self) -> bool:
+        """Check if the connection is alive by sending a lightweight query.
+
+        Returns True if the connection is responsive, False otherwise.
+        """
+        if self._sock is None:
+            return False
+        try:
+            result = self.query("1b")
+            return result is not None
+        except Exception:
+            return False

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Iterator, TYPE_CHECKING
 
 from .connection.sync_conn import SyncConnection
@@ -18,6 +20,8 @@ from .query.joins import JoinQuery
 if TYPE_CHECKING:
     from .engine import Engine
     from .model.base import Model
+
+log = logging.getLogger("qorm")
 
 
 class ModelResultSet:
@@ -109,12 +113,14 @@ class Session:
     def __enter__(self) -> Session:
         self._conn = self.engine.connect()
         self._conn.open()
+        log.debug("Session opened to %s:%s", self.engine.host, self.engine.port)
         return self
 
     def __exit__(self, *exc: Any) -> None:
         if self._conn:
             self._conn.close()
             self._conn = None
+            log.debug("Session closed")
 
     @property
     def connection(self) -> SyncConnection:
@@ -124,13 +130,21 @@ class Session:
 
     def raw(self, q_expr: str, *args: Any) -> Any:
         """Execute a raw q expression."""
+        log.debug("raw: %s", q_expr)
+        t0 = time.perf_counter()
         result = self.connection.query(q_expr, *args)
+        elapsed = time.perf_counter() - t0
+        log.debug("raw completed in %.3fms", elapsed * 1000)
         return _map_result(result)
 
     def exec(self, query: SelectQuery | UpdateQuery | DeleteQuery | InsertQuery | JoinQuery) -> Any:
         """Execute a query object and return mapped results."""
         q_str = query.compile()
+        log.debug("exec: %s", q_str)
+        t0 = time.perf_counter()
         result = self.connection.query(q_str)
+        elapsed = time.perf_counter() - t0
+        log.debug("exec completed in %.3fms", elapsed * 1000)
         model = getattr(query, 'model', None)
         return _map_result(result, model)
 
@@ -140,10 +154,14 @@ class Session:
         Sends ``func_name`` (or ``(func_name; arg1; ...)`` for multiple args)
         over IPC and returns the result.
         """
+        log.debug("call: %s(%s)", func_name, ", ".join(repr(a) for a in args))
+        t0 = time.perf_counter()
         if args:
             result = self.connection.query(func_name, *args)
         else:
             result = self.connection.query(func_name)
+        elapsed = time.perf_counter() - t0
+        log.debug("call completed in %.3fms", elapsed * 1000)
         return _map_result(result)
 
     def create_table(self, model: type[Model]) -> Any:
@@ -170,7 +188,8 @@ class Session:
     def reflect(self, tablename: str) -> type[Model]:
         """Reflect a kdb+ table and return a dynamic Model class.
 
-        Queries ``meta tablename`` and builds a Model with the correct fields.
+        Queries ``meta tablename`` for column info and ``keys tablename``
+        for key columns.  Returns a KeyedModel if the table has keys.
         """
         try:
             meta_data = self.connection.query(f"meta {tablename}")
@@ -178,7 +197,17 @@ class Session:
             raise ReflectionError(
                 f"Failed to get metadata for table {tablename!r}: {e}"
             ) from e
-        return build_model_from_meta(tablename, meta_data)
+
+        # Try to get key columns; non-keyed tables return empty list
+        key_columns: list[str] | None = None
+        try:
+            keys_result = self.connection.query(f"keys {tablename}")
+            if isinstance(keys_result, list) and keys_result:
+                key_columns = keys_result
+        except Exception:
+            pass  # If keys query fails, treat as non-keyed
+
+        return build_model_from_meta(tablename, meta_data, key_columns=key_columns)
 
     def reflect_all(self) -> dict[str, type[Model]]:
         """Reflect all tables in the kdb+ process.
@@ -209,12 +238,14 @@ class AsyncSession:
     async def __aenter__(self) -> AsyncSession:
         self._conn = self.engine.async_connect()
         await self._conn.open()
+        log.debug("AsyncSession opened to %s:%s", self.engine.host, self.engine.port)
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
         if self._conn:
             await self._conn.close()
             self._conn = None
+            log.debug("AsyncSession closed")
 
     @property
     def connection(self) -> AsyncConnection:
@@ -224,22 +255,34 @@ class AsyncSession:
 
     async def raw(self, q_expr: str, *args: Any) -> Any:
         """Execute a raw q expression."""
+        log.debug("async raw: %s", q_expr)
+        t0 = time.perf_counter()
         result = await self.connection.query(q_expr, *args)
+        elapsed = time.perf_counter() - t0
+        log.debug("async raw completed in %.3fms", elapsed * 1000)
         return _map_result(result)
 
     async def exec(self, query: SelectQuery | UpdateQuery | DeleteQuery | InsertQuery | JoinQuery) -> Any:
         """Execute a query object and return mapped results."""
         q_str = query.compile()
+        log.debug("async exec: %s", q_str)
+        t0 = time.perf_counter()
         result = await self.connection.query(q_str)
+        elapsed = time.perf_counter() - t0
+        log.debug("async exec completed in %.3fms", elapsed * 1000)
         model = getattr(query, 'model', None)
         return _map_result(result, model)
 
     async def call(self, func_name: str, *args: Any) -> Any:
         """Call a named q function with the given arguments."""
+        log.debug("async call: %s(%s)", func_name, ", ".join(repr(a) for a in args))
+        t0 = time.perf_counter()
         if args:
             result = await self.connection.query(func_name, *args)
         else:
             result = await self.connection.query(func_name)
+        elapsed = time.perf_counter() - t0
+        log.debug("async call completed in %.3fms", elapsed * 1000)
         return _map_result(result)
 
     async def create_table(self, model: type[Model]) -> Any:
@@ -268,7 +311,16 @@ class AsyncSession:
             raise ReflectionError(
                 f"Failed to get metadata for table {tablename!r}: {e}"
             ) from e
-        return build_model_from_meta(tablename, meta_data)
+
+        key_columns: list[str] | None = None
+        try:
+            keys_result = await self.connection.query(f"keys {tablename}")
+            if isinstance(keys_result, list) and keys_result:
+                key_columns = keys_result
+        except Exception:
+            pass
+
+        return build_model_from_meta(tablename, meta_data, key_columns=key_columns)
 
     async def reflect_all(self) -> dict[str, type[Model]]:
         """Reflect all tables in the kdb+ process."""

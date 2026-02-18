@@ -63,5 +63,12 @@ class SelectQuery:
             q_str = f'{self._limit_n}#({q_str})'
         return q_str
 
+    def explain(self) -> str:
+        """Return the compiled q string without executing.
+
+        Useful for debugging and understanding the generated query.
+        """
+        return f"-- SelectQuery on `{self.model.__tablename__}\n{self.compile()}"
+
     def __repr__(self) -> str:
         return f"SelectQuery({self.compile()})"

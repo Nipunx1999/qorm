@@ -7,10 +7,12 @@ from typing import Any
 from ..exc import ReflectionError
 from ..protocol.constants import QTypeCode
 from .base import Model, ModelMeta
+from .keyed import KeyedModel
 from .fields import Field
 from ..types.base import get_type_by_code
 
 # ── q type char → QTypeCode reverse map ─────────────────────────────
+# Lowercase chars = atom vectors, uppercase chars = nested vectors (lists of vectors)
 _CHAR_TO_QTYPE_CODE: dict[str, QTypeCode] = {
     ' ': QTypeCode.MIXED_LIST,   # nested / mixed list column
     'b': QTypeCode.BOOLEAN,
@@ -32,6 +34,23 @@ _CHAR_TO_QTYPE_CODE: dict[str, QTypeCode] = {
     'v': QTypeCode.SECOND,
     't': QTypeCode.TIME,
 }
+
+# Uppercase type chars represent vector-of-vector columns (e.g., 'C' = list of strings,
+# 'J' = list of long vectors). We map them to MIXED_LIST since Python represents them as lists.
+_UPPER_CHAR_TO_QTYPE_CODE: dict[str, QTypeCode] = {
+    ch.upper(): QTypeCode.MIXED_LIST for ch in _CHAR_TO_QTYPE_CODE if ch != ' '
+}
+
+
+def _resolve_type_char(type_char: str) -> QTypeCode:
+    """Resolve a q type character (lower or upper) to a QTypeCode."""
+    code = _CHAR_TO_QTYPE_CODE.get(type_char)
+    if code is not None:
+        return code
+    code = _UPPER_CHAR_TO_QTYPE_CODE.get(type_char)
+    if code is not None:
+        return code
+    return None
 
 
 def _parse_meta_result(meta_data: dict[str, list] | Any) -> list[tuple[str, str]]:
@@ -75,6 +94,7 @@ def _parse_meta_result(meta_data: dict[str, list] | Any) -> list[tuple[str, str]
 def build_model_from_meta(
     tablename: str,
     meta_data: dict[str, list] | Any,
+    key_columns: list[str] | None = None,
 ) -> type[Model]:
     """Dynamically create a Model class from kdb+ ``meta`` output.
 
@@ -84,38 +104,48 @@ def build_model_from_meta(
         The kdb+ table name.
     meta_data : dict
         The deserialized result of ``meta tablename``.
+    key_columns : list[str] | None
+        Optional list of key column names (from ``keys tablename``).
+        When provided, the returned class will be a KeyedModel subclass.
 
     Returns
     -------
     type[Model]
-        A dynamically created Model subclass with fields matching the table.
+        A dynamically created Model (or KeyedModel) subclass with fields matching the table.
     """
     parsed = _parse_meta_result(meta_data)
 
     if not parsed:
         raise ReflectionError(f"Table {tablename!r} has no columns")
 
+    key_set = set(key_columns) if key_columns else set()
+
     fields: dict[str, Field] = {}
     for col_name, type_char in parsed:
-        code = _CHAR_TO_QTYPE_CODE.get(type_char)
+        code = _resolve_type_char(type_char)
         if code is None:
             raise ReflectionError(
                 f"Unknown q type char {type_char!r} for column {col_name!r} "
                 f"in table {tablename!r}"
             )
         qtype = get_type_by_code(code)
-        fld = Field(name=col_name, qtype=qtype)
+        is_key = col_name in key_set
+        fld = Field(name=col_name, qtype=qtype, primary_key=is_key)
         fields[col_name] = fld
 
     # Build the class name: trade -> Trade, daily_price -> DailyPrice
     class_name = ''.join(part.capitalize() for part in tablename.split('_'))
 
+    # Choose base class
+    base_class = KeyedModel if key_set else Model
+    key_field_names = [c for c in key_columns if c in fields] if key_columns else []
+
     # Create the Model subclass dynamically, bypassing __init_subclass__
     # annotation processing by pre-setting __fields__
-    cls = ModelMeta(class_name, (Model,), {
+    cls = ModelMeta(class_name, (base_class,), {
         '__tablename__': tablename,
         '__fields__': fields,
-        '__key_fields__': [],
+        '__key_fields__': key_field_names,
         '__annotations__': {},
     })
 

@@ -57,6 +57,7 @@ from .query.joins import aj, lj, ij, wj
 from .connection.sync_conn import SyncConnection
 from .connection.async_conn import AsyncConnection
 from .connection.pool import SyncPool, AsyncPool
+from .subscription import Subscriber
 from .exc import (
     QormError, ConnectionError, HandshakeError, AuthenticationError,
     SerializationError, DeserializationError, QueryError, QError,
@@ -73,6 +74,7 @@ __all__ = [
     'EngineRegistry', 'EngineGroup',
     'QFunction', 'q_api',
     'build_model_from_meta',
+    'Subscriber',
     # Types
     'Boolean', 'Guid', 'Byte', 'Short', 'Int', 'Long',
     'Real', 'Float', 'Char', 'Symbol',

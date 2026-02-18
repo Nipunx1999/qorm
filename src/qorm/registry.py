@@ -74,6 +74,22 @@ class EngineRegistry:
         from .session import AsyncSession
         return AsyncSession(self.get(name))
 
+    def pool(self, name: str | None = None, **kwargs: Any) -> Any:
+        """Create a SyncPool for the named (or default) engine.
+
+        Extra keyword arguments are passed to SyncPool (min_size, max_size, etc.).
+        """
+        from .connection.pool import SyncPool
+        return SyncPool(self.get(name), **kwargs)
+
+    def async_pool(self, name: str | None = None, **kwargs: Any) -> Any:
+        """Create an AsyncPool for the named (or default) engine.
+
+        Extra keyword arguments are passed to AsyncPool (min_size, max_size, etc.).
+        """
+        from .connection.pool import AsyncPool
+        return AsyncPool(self.get(name), **kwargs)
+
     @classmethod
     def from_config(cls, config: dict[str, dict[str, Any]]) -> EngineRegistry:
         """Build a registry from a config dict.

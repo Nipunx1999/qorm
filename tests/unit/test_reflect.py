@@ -204,15 +204,22 @@ class TestSessionReflection:
 
     def test_reflect(self):
         s = self._make_session()
-        s._conn.query.return_value = {
-            'c': ['sym', 'price', 'size'],
-            't': ['s', 'f', 'j'],
-            'f': ['', '', ''],
-            'a': ['', '', ''],
-        }
+
+        def mock_query(expr):
+            if expr == "meta trade":
+                return {
+                    'c': ['sym', 'price', 'size'],
+                    't': ['s', 'f', 'j'],
+                    'f': ['', '', ''],
+                    'a': ['', '', ''],
+                }
+            elif expr == "keys trade":
+                return []
+            return None
+
+        s._conn.query.side_effect = mock_query
 
         Trade = s.reflect("trade")
-        s._conn.query.assert_called_once_with("meta trade")
         assert Trade.__tablename__ == 'trade'
         assert set(Trade.__fields__) == {'sym', 'price', 'size'}
 

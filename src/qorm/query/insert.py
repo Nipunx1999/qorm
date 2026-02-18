@@ -66,6 +66,10 @@ class InsertQuery:
         cols_q = ';'.join(col_strs)
         return f'`{tablename} insert ({cols_q})'
 
+    def explain(self) -> str:
+        """Return the compiled q string without executing."""
+        return f"-- InsertQuery on `{self.model.__tablename__} ({len(self.rows)} rows)\n{self.compile()}"
+
     def __repr__(self) -> str:
         return f"InsertQuery({self.model.__tablename__}, {len(self.rows)} rows)"
 

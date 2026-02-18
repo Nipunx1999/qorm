@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import ssl
 from typing import Any
 
 from ..exc import ConnectionError as QConnError
@@ -12,6 +14,9 @@ from ..protocol.serializer import Serializer
 from ..protocol.deserializer import Deserializer
 from .base import AsyncBaseConnection
 from .handshake import build_handshake, parse_handshake_response
+
+
+log = logging.getLogger("qorm.connection")
 
 
 class AsyncConnection(AsyncBaseConnection):
@@ -24,12 +29,14 @@ class AsyncConnection(AsyncBaseConnection):
         username: str = "",
         password: str = "",
         timeout: float | None = None,
+        tls_context: ssl.SSLContext | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.timeout = timeout
+        self.tls_context = tls_context
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._serializer = Serializer()
@@ -41,7 +48,9 @@ class AsyncConnection(AsyncBaseConnection):
             return
         try:
             self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port),
+                asyncio.open_connection(
+                    self.host, self.port, ssl=self.tls_context,
+                ),
                 timeout=self.timeout,
             )
         except OSError as e:
@@ -49,6 +58,7 @@ class AsyncConnection(AsyncBaseConnection):
 
         try:
             await self._handshake()
+            log.debug("Async connected to %s:%s (capability=%d)", self.host, self.port, self._capability)
         except Exception:
             await self.close()
             raise
@@ -102,3 +112,16 @@ class AsyncConnection(AsyncBaseConnection):
         else:
             await self.send(q_expr)
         return await self.receive()
+
+    async def ping(self) -> bool:
+        """Check if the connection is alive by sending a lightweight query.
+
+        Returns True if the connection is responsive, False otherwise.
+        """
+        if self._reader is None:
+            return False
+        try:
+            result = await self.query("1b")
+            return result is not None
+        except Exception:
+            return False

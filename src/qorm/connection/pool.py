@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import queue
 import threading
 from typing import Any, TYPE_CHECKING
@@ -14,9 +15,14 @@ if TYPE_CHECKING:
     from .sync_conn import SyncConnection
     from .async_conn import AsyncConnection
 
+log = logging.getLogger("qorm.pool")
+
 
 class SyncPool:
     """Thread-safe synchronous connection pool.
+
+    Connections are health-checked on acquire.  Stale connections are
+    replaced transparently — the caller always receives a usable connection.
 
     Usage::
 
@@ -29,11 +35,13 @@ class SyncPool:
     """
 
     def __init__(self, engine: Engine, min_size: int = 1,
-                 max_size: int = 10, timeout: float = 30.0) -> None:
+                 max_size: int = 10, timeout: float = 30.0,
+                 check_on_acquire: bool = True) -> None:
         self._engine = engine
         self._min_size = min_size
         self._max_size = max_size
         self._timeout = timeout
+        self._check_on_acquire = check_on_acquire
         self._pool: queue.Queue[SyncConnection] = queue.Queue(maxsize=max_size)
         self._size = 0
         self._lock = threading.Lock()
@@ -49,8 +57,23 @@ class SyncPool:
         self._pool.put(conn)
         self._size += 1
 
+    def _replace_connection(self, dead_conn: SyncConnection) -> SyncConnection:
+        """Close a dead connection and create a fresh one."""
+        try:
+            dead_conn.close()
+        except Exception:
+            pass
+        log.debug("Replacing dead connection to %s:%s", self._engine.host, self._engine.port)
+        conn = self._engine.connect()
+        conn.open()
+        return conn
+
     def acquire(self) -> SyncConnection:
-        """Acquire a connection from the pool."""
+        """Acquire a connection from the pool.
+
+        If ``check_on_acquire`` is True, pings the connection before returning.
+        Dead connections are replaced automatically.
+        """
         if self._closed:
             raise PoolError("Pool is closed")
 
@@ -67,6 +90,11 @@ class SyncPool:
             except queue.Empty:
                 raise PoolExhaustedError(
                     f"No connections available (pool size: {self._max_size})")
+
+        # Health check
+        if self._check_on_acquire and not conn.is_open:
+            conn = self._replace_connection(conn)
+
         return conn
 
     def release(self, conn: SyncConnection) -> None:
@@ -91,6 +119,11 @@ class SyncPool:
                 break
         self._size = 0
 
+    @property
+    def size(self) -> int:
+        """Current number of connections (in-use + idle)."""
+        return self._size
+
     def __enter__(self) -> SyncPool:
         return self
 
@@ -100,6 +133,9 @@ class SyncPool:
 
 class AsyncPool:
     """Asyncio connection pool.
+
+    Connections are health-checked on acquire.  Stale connections are
+    replaced transparently.
 
     Usage::
 
@@ -112,11 +148,13 @@ class AsyncPool:
     """
 
     def __init__(self, engine: Engine, min_size: int = 1,
-                 max_size: int = 10, timeout: float = 30.0) -> None:
+                 max_size: int = 10, timeout: float = 30.0,
+                 check_on_acquire: bool = True) -> None:
         self._engine = engine
         self._min_size = min_size
         self._max_size = max_size
         self._timeout = timeout
+        self._check_on_acquire = check_on_acquire
         self._pool: asyncio.Queue[AsyncConnection] = asyncio.Queue(maxsize=max_size)
         self._size = 0
         self._lock = asyncio.Lock()
@@ -133,8 +171,23 @@ class AsyncPool:
         await self._pool.put(conn)
         self._size += 1
 
+    async def _replace_connection(self, dead_conn: AsyncConnection) -> AsyncConnection:
+        """Close a dead connection and create a fresh one."""
+        try:
+            await dead_conn.close()
+        except Exception:
+            pass
+        log.debug("Replacing dead connection to %s:%s", self._engine.host, self._engine.port)
+        conn = self._engine.async_connect()
+        await conn.open()
+        return conn
+
     async def acquire(self) -> AsyncConnection:
-        """Acquire a connection from the pool."""
+        """Acquire a connection from the pool.
+
+        If ``check_on_acquire`` is True, pings the connection before returning.
+        Dead connections are replaced automatically.
+        """
         if self._closed:
             raise PoolError("Pool is closed")
 
@@ -151,6 +204,11 @@ class AsyncPool:
             except asyncio.TimeoutError:
                 raise PoolExhaustedError(
                     f"No connections available (pool size: {self._max_size})")
+
+        # Health check
+        if self._check_on_acquire and not conn.is_open:
+            conn = await self._replace_connection(conn)
+
         return conn
 
     async def release(self, conn: AsyncConnection) -> None:
@@ -173,6 +231,11 @@ class AsyncPool:
             except asyncio.QueueEmpty:
                 break
         self._size = 0
+
+    @property
+    def size(self) -> int:
+        """Current number of connections (in-use + idle)."""
+        return self._size
 
     async def __aenter__(self) -> AsyncPool:
         await self.initialize()

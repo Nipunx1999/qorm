@@ -25,6 +25,10 @@ class JoinQuery:
     def compile(self) -> str:
         raise NotImplementedError
 
+    def explain(self) -> str:
+        """Return the compiled q string without executing."""
+        return f"-- {self.join_type} join: {self.left.__tablename__} <-> {self.right.__tablename__}\n{self.compile()}"
+
     def __repr__(self) -> str:
         return f"{self.join_type}({self.left.__tablename__}, {self.right.__tablename__})"
 
