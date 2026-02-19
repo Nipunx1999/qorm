@@ -23,6 +23,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.scripts]
+qorm = "qorm.cli:main"
+
 [project.optional-dependencies]
 pandas = ["pandas>=1.5"]
 toml = ["tomli>=2.0; python_version<'3.11'"]
