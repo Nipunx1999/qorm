@@ -205,6 +205,21 @@ class Session:
             return result
         return list(result) if result else []
 
+    def functions(self, namespace: str = "") -> list[str]:
+        """List all function names in the kdb+ process.
+
+        Parameters
+        ----------
+        namespace:
+            Optional namespace to list (e.g. ``".ns"``).
+            Empty string lists the default namespace.
+        """
+        cmd = f"\\f {namespace}" if namespace else "\\f"
+        result = self.connection.query(cmd)
+        if isinstance(result, list):
+            return result
+        return list(result) if result else []
+
     def reflect(self, tablename: str) -> type[Model]:
         """Reflect a kdb+ table and return a dynamic Model class.
 
@@ -338,6 +353,21 @@ class AsyncSession:
     async def tables(self) -> list[str]:
         """List all table names in the kdb+ process."""
         result = await self.connection.query("tables[]")
+        if isinstance(result, list):
+            return result
+        return list(result) if result else []
+
+    async def functions(self, namespace: str = "") -> list[str]:
+        """List all function names in the kdb+ process.
+
+        Parameters
+        ----------
+        namespace:
+            Optional namespace to list (e.g. ``".ns"``).
+            Empty string lists the default namespace.
+        """
+        cmd = f"\\f {namespace}" if namespace else "\\f"
+        result = await self.connection.query(cmd)
         if isinstance(result, list):
             return result
         return list(result) if result else []
