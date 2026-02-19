@@ -220,6 +220,13 @@ class Session:
             return result
         return list(result) if result else []
 
+    def namespaces(self) -> list[str]:
+        """List all namespaces (directories) in the kdb+ process."""
+        result = self.connection.query("\\d")
+        if isinstance(result, list):
+            return result
+        return list(result) if result else []
+
     def reflect(self, tablename: str) -> type[Model]:
         """Reflect a kdb+ table and return a dynamic Model class.
 
@@ -368,6 +375,13 @@ class AsyncSession:
         """
         cmd = f"\\f {namespace}" if namespace else "\\f"
         result = await self.connection.query(cmd)
+        if isinstance(result, list):
+            return result
+        return list(result) if result else []
+
+    async def namespaces(self) -> list[str]:
+        """List all namespaces (directories) in the kdb+ process."""
+        result = await self.connection.query("\\d")
         if isinstance(result, list):
             return result
         return list(result) if result else []
