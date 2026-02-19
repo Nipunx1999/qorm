@@ -1528,3 +1528,93 @@ source = generate_model_source(
 )
 print(source)
 ```
+
+---
+
+## 52. Introspection — discover namespaces, functions, and tables
+
+Explore a kdb+ process before writing any queries.
+
+```python
+with Session(engine) as s:
+    # What namespaces exist?
+    print(s.namespaces())   # ['.', '.myapi', '.utils']
+
+    # What tables exist?
+    print(s.tables())       # ['trade', 'quote', 'bondrate']
+
+    # What functions are available?
+    print(s.functions())    # ['getPrice', 'calcVWAP', 'submitOrder']
+
+    # Functions in a specific namespace
+    print(s.functions(".myapi"))  # ['getData', 'runCalc']
+
+    # Full discovery
+    for ns in s.namespaces():
+        funcs = s.functions(ns) if ns != '.' else s.functions()
+        if funcs:
+            print(f"{ns}: {funcs}")
+```
+
+---
+
+## 53. Function-only kdb+ APIs — no tables, just RPC
+
+Some kdb+ processes expose only functions, not tables. Use `q_api` or `s.call()` directly.
+
+```python
+from qorm import Engine, Session, q_api, QFunction
+
+engine = Engine(host="api-server", port=5000, username="user", password="pass")
+
+# Discover what's available
+with Session(engine) as s:
+    print("Namespaces:", s.namespaces())
+    print("Functions:", s.functions())
+
+# Define typed wrappers for the remote API
+@q_api("getPrice")
+def get_price(session, sym: str, date: str): ...
+
+@q_api("getRiskReport")
+def get_risk(session, portfolio: str): ...
+
+@q_api("submitOrder")
+def submit_order(session, sym: str, side: str, qty: int, price: float): ...
+
+with Session(engine) as s:
+    price = get_price(s, "AAPL", "2026.02.18")
+    report = get_risk(s, "EQUITY_BOOK")
+    order_id = submit_order(s, "AAPL", "BUY", 100, 150.25)
+```
+
+---
+
+## 54. q_api with lambdas — define and call q logic inline
+
+When the server has no pre-built functions, define q lambdas in Python:
+
+```python
+from qorm import q_api, QFunction
+
+# Typed decorator — IDE sees the Python signature, q runs on the server
+@q_api("{[dt;isin] select from bondrate where date=dt, isin=isin}")
+def get_bond_rate(session, date: str, isin: str): ...
+
+@q_api("{[isin] select avg price by date from bondrate where isin=isin}")
+def avg_rate_by_date(session, isin: str): ...
+
+@q_api("{[s;px] select from trade where sym=s, price>px}")
+def get_filtered(session, sym: str, min_price: float): ...
+
+# Or use QFunction for quick inline wrappers
+bond_count = QFunction("{[i] count select from bondrate where isin=i}")
+latest = QFunction("{[i] select last price from bondrate where isin=i}")
+
+with Session(engine) as s:
+    rates = get_bond_rate(s, "2026.02.18", "XS1969787396")
+    avgs = avg_rate_by_date(s, "XS1969787396")
+    trades = get_filtered(s, "AAPL", 150.0)
+    n = bond_count(s, "XS1969787396")
+    last_price = latest(s, "XS1969787396")
+```

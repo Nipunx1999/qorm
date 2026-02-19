@@ -95,10 +95,14 @@ with Session(engine) as s:
   - [Reflecting a Table](#reflecting-a-table)
   - [Reflecting All Tables](#reflecting-all-tables)
   - [Using Reflected Models](#using-reflected-models)
+- [Introspection](#introspection)
+  - [Listing Namespaces](#listing-namespaces)
+  - [Listing Functions](#listing-functions)
 - [Remote Function Calls (RPC)](#remote-function-calls-rpc)
   - [Ad-hoc Calls](#ad-hoc-calls)
   - [QFunction Wrapper](#qfunction-wrapper)
   - [Typed Decorator (q_api)](#typed-decorator-q_api)
+  - [q_api with Lambdas](#q_api-with-lambdas)
 - [Service Discovery (QNS)](#service-discovery-qns)
   - [One-liner with Engine.from_service](#one-liner-with-enginefrom_service)
   - [QNS Client](#qns-client)
@@ -1187,9 +1191,56 @@ async with AsyncSession(engine) as s:
 
 ---
 
+## Introspection
+
+Discover what's available on a kdb+ process — namespaces, functions, and tables.
+
+### Listing Namespaces
+
+```python
+with Session(engine) as s:
+    namespaces = s.namespaces()
+    print(namespaces)  # ['.', '.myapi', '.utils']
+```
+
+### Listing Functions
+
+```python
+with Session(engine) as s:
+    # All functions in the default namespace
+    funcs = s.functions()
+    print(funcs)  # ['getPrice', 'getRiskReport', 'submitOrder']
+
+    # Functions in a specific namespace
+    api_funcs = s.functions(".myapi")
+    print(api_funcs)  # ['getData', 'runCalc']
+```
+
+Combined with `s.tables()`, you can fully explore a kdb+ process:
+
+```python
+with Session(engine) as s:
+    print("Namespaces:", s.namespaces())
+    print("Tables:", s.tables())
+    print("Functions:", s.functions())
+    for ns in s.namespaces():
+        if ns != '.':
+            print(f"Functions in {ns}:", s.functions(ns))
+```
+
+Async sessions support the same methods:
+
+```python
+async with AsyncSession(engine) as s:
+    namespaces = await s.namespaces()
+    funcs = await s.functions(".myapi")
+```
+
+---
+
 ## Remote Function Calls (RPC)
 
-Call q functions that are already deployed on a kdb+ process without writing raw q strings.
+Call q functions on a kdb+ process — either named functions already deployed, or inline q lambdas.
 
 ### Ad-hoc Calls
 
@@ -1232,6 +1283,39 @@ def calc_vwap(session, sym: str, date: str): ...
 with Session(engine) as s:
     trades = get_trades_by_date(s, "2024.01.15")
     vwap = calc_vwap(s, "AAPL", "2024.01.15")
+```
+
+### q_api with Lambdas
+
+You can also pass a q lambda instead of a function name. This is useful when the kdb+ process doesn't have pre-defined functions — you define the logic in Python and it executes on the server:
+
+```python
+from qorm import q_api
+
+@q_api("{[dt;isin] select from bondrate where date=dt, isin=isin}")
+def get_bond_rate(session, date: str, isin: str): ...
+
+@q_api("{[isin] select avg price by date from bondrate where isin=isin}")
+def avg_rate_by_date(session, isin: str): ...
+
+@q_api("{[s;px] select from trade where sym=s, price>px}")
+def get_filtered_trades(session, sym: str, min_price: float): ...
+
+with Session(engine) as s:
+    rates = get_bond_rate(s, "2026.02.18", "XS1969787396")
+    avgs = avg_rate_by_date(s, "XS1969787396")
+    trades = get_filtered_trades(s, "AAPL", 150.0)
+```
+
+`QFunction` also accepts lambdas:
+
+```python
+from qorm import QFunction
+
+get_bond_rate = QFunction("{[dt;isin] select from bondrate where date=dt, isin=isin}")
+
+with Session(engine) as s:
+    result = get_bond_rate(s, "2026.02.18", "XS1969787396")
 ```
 
 Async sessions also support `call()`:
