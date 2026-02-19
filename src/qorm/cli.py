@@ -105,9 +105,17 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
 
     if args.tls_no_verify:
-        engine.tls_verify = False
-        if not engine.tls:
-            engine.tls = True
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        # Relax cipher requirements for kdb+ TLS compatibility
+        try:
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+        except ssl.SSLError:
+            ctx.set_ciphers("DEFAULT")
+        engine.tls = True
+        engine.tls_context = ctx
 
     table_names = [t.strip() for t in args.tables.split(",") if t.strip()]
     if not table_names:
