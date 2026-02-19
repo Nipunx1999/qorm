@@ -37,6 +37,14 @@ def _build_parser() -> argparse.ArgumentParser:
     conn.add_argument("--env", help="QNS environment (required with --service)")
     conn.add_argument("--user", default="", help="kdb+ username")
     conn.add_argument("--password", default="", help="kdb+ password")
+    conn.add_argument(
+        "--tls", action="store_true", default=False,
+        help="Enable TLS (for --host/--port connections).",
+    )
+    conn.add_argument(
+        "--tls-no-verify", action="store_true", default=False,
+        help="Disable TLS certificate verification (self-signed certs).",
+    )
 
     # What to generate
     gen.add_argument(
@@ -90,10 +98,16 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             port=args.port,
             username=args.user,
             password=args.password,
+            tls=args.tls,
         )
     else:
         print("error: provide either --host/--port or --service", file=sys.stderr)
         return 1
+
+    if args.tls_no_verify:
+        engine.tls_verify = False
+        if not engine.tls:
+            engine.tls = True
 
     table_names = [t.strip() for t in args.tables.split(",") if t.strip()]
     if not table_names:
