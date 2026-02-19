@@ -39,6 +39,17 @@ def compile_expr(expr: Expr) -> str:
     if isinstance(expr, BinOp):
         left = compile_expr(expr.left)
         right = compile_expr(expr.right)
+        # In q parse trees, a bare symbol (e.g. `AAPL) is interpreted as a
+        # column/variable reference.  Wrap symbol literals with enlist so
+        # kdb+ treats them as values:  (=;`sym;enlist `AAPL)
+        if (isinstance(expr.right, Literal)
+                and isinstance(expr.right.value, str)
+                and right.startswith('`')):
+            right = f'enlist {right}'
+        if (isinstance(expr.left, Literal)
+                and isinstance(expr.left.value, str)
+                and left.startswith('`')):
+            left = f'enlist {left}'
         return f'({expr.op};{left};{right})'
 
     if isinstance(expr, UnaryOp):
