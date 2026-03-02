@@ -321,6 +321,37 @@ with Session(engine) as s:
 
 ---
 
+## 14b. Joins with different column names (column_map)
+
+When the join columns have different names in the left and right tables, use `column_map`:
+
+```python
+with Session(engine) as s:
+    Trade = s.reflect("trade")      # has columns: sym, time, price, size
+    Position = s.reflect("position")  # has columns: symbol, timestamp, qty, desk
+
+    # Join on trade.sym = position.symbol, trade.time = position.timestamp
+    result = s.exec(
+        aj(
+            ["sym", "time"], Trade, Position,
+            column_map={"sym": "symbol", "time": "timestamp"},
+        )
+    )
+    for row in result:
+        print(f"{row.sym} {row.price} qty={row.qty} desk={row.desk}")
+```
+
+This works with any join type — `lj`, `ij`, `aj`, `wj`:
+
+```python
+# Left join: trade.sym -> ref_data.ticker
+result = s.exec(
+    lj(["sym"], Trade, RefData, column_map={"sym": "ticker"})
+)
+```
+
+---
+
 ## 15. DataFrame export
 
 ```python

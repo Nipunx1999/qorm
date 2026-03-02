@@ -999,6 +999,37 @@ You can also pass column names as strings:
 aj(["sym", "time"], Trade, Quote)
 ```
 
+### Column Mapping (Different Column Names)
+
+When the join columns have different names across tables, use the `column_map` parameter. The map goes `{left_name: right_name}` — qorm applies `xcol` renames to the right table before joining:
+
+```python
+from qorm import aj, lj
+
+class Order(Model):
+    __tablename__ = "order"
+    symbol: Symbol      # called "symbol" here, not "sym"
+    ts: Timestamp       # called "ts" here, not "time"
+    qty: Long
+
+# Join on sym=symbol, time=ts
+query = aj(
+    ["sym", "time"], Trade, Order,
+    column_map={"sym": "symbol", "time": "ts"},
+)
+# Compiles to: aj[`sym`time;trade;`sym xcol `symbol xcol `time xcol `ts xcol order]
+```
+
+This works with all join types:
+
+```python
+# Left join where "sym" in left maps to "ticker" in right
+query = lj(
+    ["sym"], Trade, RefData,
+    column_map={"sym": "ticker"},
+)
+```
+
 ### Left Join (lj)
 
 ```python
