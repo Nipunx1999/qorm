@@ -154,7 +154,19 @@ class QNS:
             path.unlink()
 
     def _build_engine(self, svc: ServiceInfo) -> Engine:
+        import ssl as _ssl
+
         from ..engine import Engine
+
+        tls_context = None
+        if svc.tls:
+            tls_context = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+            tls_context.check_hostname = False
+            tls_context.verify_mode = _ssl.CERT_NONE
+            try:
+                tls_context.set_ciphers("DEFAULT:@SECLEVEL=0")
+            except _ssl.SSLError:
+                tls_context.set_ciphers("DEFAULT")
 
         return Engine(
             host=svc.host,
@@ -162,6 +174,7 @@ class QNS:
             username=self._username,
             password=self._password,
             tls=svc.tls,
+            tls_context=tls_context,
         )
 
 

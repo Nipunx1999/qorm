@@ -40,6 +40,7 @@ from .types import (
 from .model.base import Model
 from .model.keyed import KeyedModel
 from .model.fields import Field, field
+from .model.validated import ValidatedModel
 from .model.reflect import build_model_from_meta
 from .engine import Engine
 from .session import Session, AsyncSession, ModelResultSet
@@ -69,7 +70,7 @@ from .subscription import Subscriber
 from .exc import (
     QormError, ConnectionError, HandshakeError, AuthenticationError,
     SerializationError, DeserializationError, QueryError, QError,
-    ModelError, SchemaError, PoolError, PoolExhaustedError,
+    ModelError, ValidationError, SchemaError, PoolError, PoolExhaustedError,
     EngineNotFoundError, ReflectionError,
     QNSError, QNSConfigError, QNSRegistryError, QNSServiceNotFoundError,
 )
@@ -79,7 +80,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     # Core
-    'Model', 'KeyedModel', 'Field', 'field',
+    'Model', 'KeyedModel', 'ValidatedModel', 'Field', 'field',
     'Engine', 'Session', 'AsyncSession', 'ModelResultSet',
     'EngineRegistry', 'EngineGroup',
     'QFunction', 'q_api',
@@ -114,7 +115,7 @@ __all__ = [
     # Exceptions
     'QormError', 'ConnectionError', 'HandshakeError', 'AuthenticationError',
     'SerializationError', 'DeserializationError', 'QueryError', 'QError',
-    'ModelError', 'SchemaError', 'PoolError', 'PoolExhaustedError',
+    'ModelError', 'ValidationError', 'SchemaError', 'PoolError', 'PoolExhaustedError',
     'EngineNotFoundError', 'ReflectionError',
     'QNSError', 'QNSConfigError', 'QNSRegistryError', 'QNSServiceNotFoundError',
     # QNS

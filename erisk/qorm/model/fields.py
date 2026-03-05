@@ -27,6 +27,10 @@ class Field:
         Default value for the field (None means no default).
     nullable : bool
         Whether the field accepts QNull values.
+    gt, ge, lt, le : numeric constraints (for ValidatedModel).
+    min_length, max_length : string length constraints.
+    pattern : regex pattern constraint for strings.
+    validator : callable for custom validation.
     """
     name: str = ''
     qtype: QType | None = None
@@ -34,6 +38,15 @@ class Field:
     attr: int = ATTR_NONE
     default: Any = None
     nullable: bool = True
+    # Validation constraints (used by ValidatedModel)
+    gt: Any = None
+    ge: Any = None
+    lt: Any = None
+    le: Any = None
+    min_length: int | None = None
+    max_length: int | None = None
+    pattern: str | None = None
+    validator: Any = None
 
     @property
     def q_name(self) -> str:
@@ -78,6 +91,14 @@ def field(
     attr: int = ATTR_NONE,
     default: Any = None,
     nullable: bool = True,
+    gt: Any = None,
+    ge: Any = None,
+    lt: Any = None,
+    le: Any = None,
+    min_length: int | None = None,
+    max_length: int | None = None,
+    pattern: str | None = None,
+    validator: Any = None,
 ) -> Any:
     """Create field metadata for use as a default value in model annotations.
 
@@ -87,10 +108,25 @@ def field(
             sym: Symbol = field(attr=ATTR_SORTED)
             price: Float
             size: Long = field(default=0)
+
+    With validation constraints (for ValidatedModel)::
+
+        class Trade(ValidatedModel):
+            sym: Symbol = field(min_length=1, max_length=10)
+            price: Float = field(gt=0)
+            size: Long = field(ge=0, le=1_000_000)
     """
     return Field(
         primary_key=primary_key,
         attr=attr,
         default=default,
         nullable=nullable,
+        gt=gt,
+        ge=ge,
+        lt=lt,
+        le=le,
+        min_length=min_length,
+        max_length=max_length,
+        pattern=pattern,
+        validator=validator,
     )

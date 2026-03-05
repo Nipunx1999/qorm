@@ -41,6 +41,14 @@ class ModelError(QormError):
     """Error in model definition or usage."""
 
 
+class ValidationError(ModelError):
+    """Pydantic validation failed on a ValidatedModel."""
+
+    def __init__(self, message: str, errors: list | None = None) -> None:
+        self.errors = errors or []
+        super().__init__(message)
+
+
 class SchemaError(QormError):
     """Error in DDL operations."""
 
